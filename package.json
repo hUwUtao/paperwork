@@ -1,0 +1,16 @@
+{
+  "name": "paper-proposals-toolchain",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "paper": "bun cli/paper-proposals.js",
+    "viewer": "bun cli/paper-proposals.js serve",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "diff": "^9.0.0",
+    "katex": "^0.18.9",
+    "marked": "^15.0.12",
+    "shiki": "^4.4.3"
+  }
+}

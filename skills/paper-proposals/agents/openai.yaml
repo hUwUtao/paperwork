@@ -1,0 +1,4 @@
+interface:
+  display_name: "Paper Proposals"
+  short_description: "Manage RFC-style design proposals with human approval gates"
+  default_prompt: "Submit each design component as an RFC proposal and route it through human review."

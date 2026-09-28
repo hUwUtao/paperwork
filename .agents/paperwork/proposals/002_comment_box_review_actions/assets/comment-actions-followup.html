@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Comment composer layout follow-up</title>
+<style>
+  :root { color: #24292f; background: #f6f8fa; font: 16px/1.5 system-ui, sans-serif; }
+  body { margin: 0; padding: 48px; }
+  .messagebox { width: 760px; padding: 18px; border: 1px solid #8c959f; border-radius: 8px; background: white; box-shadow: 0 8px 24px #24292f18; }
+  .toolbar, .actions { display: flex; align-items: center; gap: 8px; }
+  .toolbar { padding-bottom: 12px; border-bottom: 1px solid #d8dee4; }
+  button, summary { border: 1px solid #8c959f; border-radius: 6px; background: white; padding: 8px 12px; font: inherit; cursor: default; }
+  .menu-anchor { position: relative; }
+  .menu { position: absolute; z-index: 2; min-width: 250px; padding: 6px; border: 1px solid #8c959f; border-radius: 6px; background: white; box-shadow: 0 8px 24px #24292f26; }
+  .toolbar-menu { top: 42px; left: 0; }
+  .review-menu { right: 0; bottom: 48px; }
+  .menu-anchor > summary { list-style: none; }
+  .menu-anchor > summary::-webkit-details-marker { display: none; }
+  .menu button { display: block; width: 100%; border: 0; border-radius: 4px; text-align: left; }
+  .menu button:hover { background: #ddf4ff; }
+  textarea { display: block; width: 100%; height: 150px; margin: 16px 0; box-sizing: border-box; resize: none; border: 1px solid #8c959f; border-radius: 6px; padding: 12px; font: inherit; }
+  .actions { position: relative; justify-content: flex-end; }
+  .review { background: #24292f; color: white; }
+  .caption { margin: 0 0 12px; color: #57606a; font-size: 14px; }
+</style>
+<main>
+  <p class="caption">Follow-up sample: the editor keeps document flow; menus float from their owning controls.</p>
+  <form class="messagebox">
+    <div class="toolbar">
+      <button type="button">Bold</button>
+      <button type="button">Italic</button>
+      <details class="menu-anchor" open>
+        <summary>More</summary>
+        <div class="menu toolbar-menu" role="menu">
+          <button type="button" role="menuitem">Quote</button>
+          <button type="button" role="menuitem">Code</button>
+          <button type="button" role="menuitem">Link</button>
+          <button type="button" role="menuitem">Preview</button>
+        </div>
+      </details>
+    </div>
+    <textarea aria-label="Write a comment" placeholder="Write a comment in Markdown..."></textarea>
+    <div class="actions">
+      <button type="button">Comment</button>
+      <details class="menu-anchor" open>
+        <summary class="review">Review</summary>
+        <div class="menu review-menu" role="menu">
+          <button type="button" role="menuitem">Approve</button>
+          <button type="button" role="menuitem">Reject with comment</button>
+          <button type="button" role="menuitem">Reject as complex or misformatted</button>
+          <button type="button" role="menuitem">Reject</button>
+        </div>
+      </details>
+    </div>
+  </form>
+</main>
+</html>

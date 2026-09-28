@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+skill_script="$PWD/cli/paper-proposals.js"
+[[ -f "$skill_script" ]] || { printf 'error: run this command from the paperwork repository root\n' >&2; exit 1; }
+
+command=${1:-serve}
+case "$command" in
+  web|gui) command=serve; shift ;;
+  *) [[ $# -eq 0 ]] || shift ;;
+esac
+
+export PAPER_PROPOSALS_ROOT="${PAPER_PROPOSALS_ROOT:-$PWD/.agents/paperwork/proposals}"
+exec bun "$skill_script" "$command" "$@"

@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Comment composer visual sample</title>
+<style>
+  :root { color: #24292f; background: #f6f8fa; font: 16px/1.5 system-ui, sans-serif; }
+  body { margin: 0; padding: 48px; }
+  .messagebox { width: 760px; padding: 18px; border: 1px solid #8c959f; border-radius: 8px; background: white; box-shadow: 0 8px 24px #24292f18; }
+  .toolbar, .actions { display: flex; align-items: center; gap: 8px; }
+  .toolbar { padding-bottom: 12px; border-bottom: 1px solid #d8dee4; }
+  button, summary { border: 1px solid #8c959f; border-radius: 6px; background: white; padding: 8px 12px; font: inherit; cursor: default; }
+  .more { position: relative; }
+  .more summary { list-style: none; }
+  .more summary::-webkit-details-marker { display: none; }
+  .menu { position: absolute; top: 42px; left: 0; z-index: 2; width: 260px; padding: 6px; border: 1px solid #8c959f; border-radius: 6px; background: white; box-shadow: 0 8px 24px #24292f26; }
+  .menu button { display: block; width: 100%; border: 0; border-radius: 4px; text-align: left; }
+  .menu button:hover { background: #ddf4ff; }
+  textarea { display: block; width: 100%; height: 150px; margin: 16px 0; box-sizing: border-box; resize: none; border: 1px solid #8c959f; border-radius: 6px; padding: 12px; font: inherit; }
+  .actions { justify-content: flex-end; }
+  .review { background: #24292f; color: white; }
+  .caption { margin: 0 0 12px; color: #57606a; font-size: 14px; }
+</style>
+<main>
+  <p class="caption">Visual sample: secondary formatting controls are grouped, while Comment and Review remain explicit.</p>
+  <form class="messagebox">
+    <div class="toolbar">
+      <button type="button">Bold</button>
+      <button type="button">Italic</button>
+      <details class="more" open>
+        <summary>More</summary>
+        <div class="menu" role="menu">
+          <button type="button" role="menuitem">Quote</button>
+          <button type="button" role="menuitem">Code</button>
+          <button type="button" role="menuitem">Link</button>
+          <button type="button" role="menuitem">Preview</button>
+        </div>
+      </details>
+    </div>
+    <textarea aria-label="Write a comment" placeholder="Write a comment in Markdown..."></textarea>
+    <div class="actions">
+      <button type="button">Comment</button>
+      <button type="button" class="review" aria-haspopup="menu" aria-expanded="true">Review</button>
+      <div class="menu" role="menu" style="position: relative; top: 0; width: 280px;">
+        <button type="button" role="menuitem">Approve</button>
+        <button type="button" role="menuitem">Reject with comment</button>
+        <button type="button" role="menuitem">Reject as complex or misformatted</button>
+        <button type="button" role="menuitem">Reject</button>
+      </div>
+    </div>
+  </form>
+</main>
+</html>
