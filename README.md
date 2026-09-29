@@ -8,7 +8,7 @@ The intent is responsibility without turning every LLM step into a blocking appr
 
 The CLI requires [Bun](https://bun.sh/).
 
-Install this repository directly from GitHub:
+From this GitHub repository:
 
 ```sh
 bun add --dev github:hUwUtao/paperwork
