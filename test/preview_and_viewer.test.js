@@ -1,8 +1,24 @@
-import { describe, it, expect } from "bun:test";
+import { describe, it, expect, beforeAll, afterAll } from "bun:test";
 import { marked } from "marked";
+import { spawn } from "node:child_process";
 import "../cli/proposals.js";
 
 describe("Proposal Viewer and Preview Popover Tests", () => {
+  let serverProcess;
+  const testPort = 3122;
+
+  beforeAll(async () => {
+    serverProcess = spawn("bun", ["cli/proposals.js", "serve", String(testPort)], {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    // Wait for server to boot
+    await new Promise((resolve) => setTimeout(resolve, 800));
+  });
+
+  afterAll(() => {
+    serverProcess?.kill();
+  });
+
   it("renders code references with data-preview-code and appropriate line numbers", () => {
     const markdown = "Check out `package.json#L1-L5` for project setup.";
     const html = marked.parse(markdown);
@@ -53,5 +69,37 @@ describe("Proposal Viewer and Preview Popover Tests", () => {
     const scriptContent = proposalsModule.slice(scriptStart, scriptEnd);
     expect(scriptContent).not.toContain("escapeHtml(");
     expect(scriptContent).toContain("${esc(");
+  });
+
+  it("renders SSR code preview highlighted with Shiki and line numbers", async () => {
+    const res = await fetch(`http://127.0.0.1:${testPort}/preview?target=package.json%23L1-L3`);
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    // Must be highlighted with Shiki
+    expect(html).toContain('class="shiki github-light"');
+    // Must have line number span for line 1
+    expect(html).toContain('<span class="preview-line-num">1</span>');
+    // Must contain title with line range
+    expect(html).toContain("package.json · L1-L3");
+    // Must retain style colors from Shiki
+    expect(html).toContain('style="color:');
+  });
+
+  it("renders SSR proposal preview with section title and without pilcrow ¶", async () => {
+    const res = await fetch(`http://127.0.0.1:${testPort}/preview?target=%2Fproposal%2F001_sse_liveness_resume%23clause-scope`);
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain("SSE liveness and resume for the proposal viewer › Scope");
+    expect(html).toContain('<div class="preview-popover-body">');
+    // Must not contain pilcrow ¶
+    expect(html).not.toContain("¶");
+  });
+
+  it("supports backwards compatibility for /preview/source", async () => {
+    const res = await fetch(`http://127.0.0.1:${testPort}/preview/source?target=package.json%23L1-L2`);
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.file).toBe("package.json");
+    expect(json.lines.length).toBe(2);
   });
 });

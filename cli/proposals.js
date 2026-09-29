@@ -544,6 +544,158 @@ function sourcePreviewResponse(target, url) {
   }), { headers: { "content-type": "application/json; charset=utf-8" } });
 }
 
+function codePreviewHtml(target) {
+  const parsed = parseCodeReference(target);
+  if (!parsed || !parsed.filePath) {
+    return `<div class="preview-popover-title">${escapeHtml(target || "Code Reference")}</div><div class="preview-popover-body">Invalid source reference.</div>`;
+  }
+
+  const repoRoot = process.cwd();
+  const aliased = DEFAULT_SOURCE_ALIASES[parsed.filePath] ?? parsed.filePath;
+  const cleanGitPath = (aliased.startsWith("/") ? aliased.slice(1) : aliased).replace(/^\.\//, "");
+  let content = null;
+
+  if (parsed.commit) {
+    const show = spawnSync("git", ["show", `${parsed.commit}:${cleanGitPath}`], { cwd: repoRoot, encoding: "utf8" });
+    if (show.status === 0) content = show.stdout;
+  } else {
+    const localPath = resolve(repoRoot, aliased);
+    if (existsSync(localPath)) {
+      try {
+        content = readFileSync(localPath, "utf8");
+      } catch {}
+    }
+    if (content === null) {
+      const show = spawnSync("git", ["show", `HEAD:${cleanGitPath}`], { cwd: repoRoot, encoding: "utf8" });
+      if (show.status === 0) content = show.stdout;
+    }
+  }
+
+  if (content === null) {
+    return `<div class="preview-popover-title">${escapeHtml(parsed.filePath)}</div><div class="preview-popover-body">Source not found: <code>${escapeHtml(parsed.filePath)}</code></div>`;
+  }
+
+  const allLines = content.split("\n");
+  const totalLines = allLines.length;
+
+  let start = parsed.startLine ? Math.max(1, Math.min(parsed.startLine, totalLines)) : 1;
+  let end = parsed.endLine ? Math.max(start, Math.min(parsed.endLine, totalLines)) : (parsed.startLine ? start : Math.min(30, totalLines));
+
+  const codeSlice = allLines.slice(start - 1, end).join("\n");
+  const language = languageFor(parsed.filePath);
+  const lang = highlighter.getLoadedLanguages().includes(language) ? language : "text";
+
+  let highlightedCode;
+  try {
+    highlightedCode = highlighter.codeToHtml(codeSlice, {
+      lang,
+      theme: "github-light",
+      transformers: [
+        {
+          line(node, line) {
+            node.children.unshift({
+              type: "element",
+              tagName: "span",
+              properties: { class: "preview-line-num" },
+              children: [{ type: "text", value: String(start + line - 1) }]
+            });
+          }
+        }
+      ]
+    });
+  } catch {
+    const plainLines = allLines.slice(start - 1, end).map((lineText, idx) => `<span class="line"><span class="preview-line-num">${start + idx}</span>${escapeHtml(lineText)}</span>`).join("\n");
+    highlightedCode = `<pre class="shiki github-light"><code>${plainLines}</code></pre>`;
+  }
+
+  const range = `L${start}${end > start ? `-L${end}` : ""}`;
+  const title = `${escapeHtml(parsed.filePath)} · ${escapeHtml(range)}${parsed.commit ? ` @ ${escapeHtml(parsed.commit.slice(0, 8))}` : ""}`;
+
+  return `<div class="preview-popover-title">${title}</div>${highlightedCode}`;
+}
+
+function proposalPreviewHtml(db, target) {
+  const [rawTarget, hash] = target.split("#");
+  const tag = resolveProposalTag(rawTarget) ?? rawTarget.replace(/^\/proposal\//, "").replace(/^\.\//, "").replace(/^\.\.\//, "").replace(/\/PROPOSAL\.md$/i, "").replace(/\/$/, "");
+  let row;
+  try {
+    row = proposalRecord(tag, db);
+  } catch {
+    return `<div class="preview-popover-title">${escapeHtml(tag || target)}</div><div class="preview-popover-body">Proposal not found.</div>`;
+  }
+  if (!row) {
+    return `<div class="preview-popover-title">${escapeHtml(tag || target)}</div><div class="preview-popover-body">Proposal not found.</div>`;
+  }
+
+  const body = markdownBody(row.markdown);
+  let title = row.title;
+  let sectionHtml = "";
+
+  if (hash) {
+    const targetSlug = hash.replace(/^#/, "").replace(/^clause-/, "").toLowerCase();
+    const tokens = marked.lexer(body);
+    let matchedHeading = null;
+    const sectionTokens = [];
+
+    for (let i = 0; i < tokens.length; i++) {
+      const tok = tokens[i];
+      if (tok.type === "heading") {
+        const slug = (tok.text || "").replace(/<[^>]*>/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+        if (slug === targetSlug || `clause-${slug}` === hash.replace(/^#/, "")) {
+          matchedHeading = tok;
+          title = `${row.title} › ${tok.text.replace(/<[^>]*>/g, "").trim()}`;
+          continue;
+        }
+        if (matchedHeading && tok.depth <= matchedHeading.depth) {
+          break;
+        }
+      }
+      if (matchedHeading) {
+        sectionTokens.push(tok);
+        if (sectionTokens.length >= 6) break;
+      }
+    }
+
+    if (sectionTokens.length) {
+      sectionHtml = marked.parser(sectionTokens);
+    }
+  }
+
+  if (!sectionHtml) {
+    const tokens = marked.lexer(body);
+    const excerptTokens = [];
+    for (const tok of tokens) {
+      if (tok.type === "heading" && tok.depth === 1) continue;
+      excerptTokens.push(tok);
+      if (excerptTokens.length >= 5) break;
+    }
+    sectionHtml = marked.parser(excerptTokens);
+  }
+
+  const cleanHtml = sectionHtml
+    .replace(/<a class="clause-link"[^>]*>[\s\S]*?<\/a>/g, "")
+    .replaceAll("¶", "");
+
+  return `<div class="preview-popover-title">${escapeHtml(title)}</div><div class="preview-popover-body">${cleanHtml}</div>`;
+}
+
+function previewResponse(db, target, url, request) {
+  if (!target) {
+    return new Response('<div class="preview-popover-title">Preview</div><div class="preview-popover-body">No target specified.</div>', {
+      status: 400,
+      headers: { "content-type": "text/html; charset=utf-8" },
+    });
+  }
+
+  const clean = target.split(/[?#]/)[0];
+  const isProposal = Boolean(resolveProposalTag(target) || /^(?:\/proposal\/[A-Za-z0-9._-]+|[0-9]{3}[A-Za-z0-9._-]+$)/.test(clean));
+
+  const html = isProposal ? proposalPreviewHtml(db, target) : codePreviewHtml(target);
+  return new Response(html, {
+    headers: { "content-type": "text/html; charset=utf-8" },
+  });
+}
+
 function gitSourceView(url) {
   const file = url.searchParams.get("file") ?? "";
   const ref = url.searchParams.get("ref") ?? "HEAD";
@@ -578,25 +730,29 @@ function gitSourceView(url) {
 }
 
 const COMMENT_CSS = `.message-actions{position:relative;justify-content:flex-end}.toolbar-more,.review-menu-wrap{position:relative;display:inline-block}.toolbar-more summary{cursor:pointer;display:inline-block;border:1px solid #8c959f;border-radius:5px;padding:.55rem .8rem;font-size:.8rem;list-style:none}.toolbar-more summary::-webkit-details-marker{display:none}.floating-menu{position:absolute;z-index:4;min-width:14rem;padding:.35rem;background:#fff;border:1px solid #8c959f;border-radius:6px;box-shadow:0 8px 24px #24292f26}.floating-menu button{display:block;width:100%;margin:0;border:0;text-align:left}.more-menu{top:calc(100% + .4rem);left:0}.review-menu{right:0;bottom:calc(100% + .4rem)}.form-message{margin:.5rem 0;color:#cf222e;font-size:.9rem}button:focus-visible,summary:focus-visible{outline:2px solid #0969da;outline-offset:2px}@media(max-width:800px){.floating-menu{max-width:calc(100vw - 1.5rem);min-width:0}}`;
-const PROPOSAL_UI_CSS = `.metadata,.discovery{border:1px solid #8c959f;border-collapse:collapse}.metadata th,.metadata td,.discovery th,.discovery td{border:1px solid #d0d7de}.metadata thead th,.discovery thead th{background:#f6f8fa;border-bottom:2px solid #8c959f}.discovery tbody.state-group>tr:first-child th{border-top:2px solid #8c959f}.markdown-body :not(pre)>code{background:#f1f3f5;padding:.1rem .25rem;border-radius:3px}.markdown-body pre code{display:block;background:transparent!important;padding:0;border-radius:0;line-height:1.5}.markdown-body pre.shiki{background:#fff!important;border:1px solid #d0d7de;padding:1rem 0;overflow:auto;line-height:1.5!important}.markdown-body pre.shiki code{background:transparent!important;line-height:1.5!important}.markdown-body pre.shiki code span{background:transparent!important}.sourceview pre.shiki{background:#fff!important;border:1px solid #d0d7de;padding:.4rem 0;overflow:auto;line-height:0.8em!important}.sourceview pre.shiki code{background:transparent!important;line-height:0.8em!important}.sourceview pre.shiki code span{background:transparent!important}`;
+const PROPOSAL_UI_CSS = `.metadata,.discovery{border:1px solid #8c959f;border-collapse:collapse}.metadata th,.metadata td,.discovery th,.discovery td{border:1px solid #d0d7de}.metadata thead th,.discovery thead th{background:#f6f8fa;border-bottom:2px solid #8c959f}.discovery tbody.state-group>tr:first-child th{border-top:2px solid #8c959f}.markdown-body :not(pre)>code{background:#f1f3f5;padding:.1rem .25rem;border-radius:3px}.markdown-body pre code{display:block;background:transparent!important;padding:0;border-radius:0;line-height:1.5}.markdown-body pre.shiki{background:#fff!important;border:1px solid #d0d7de;padding:1rem 0;overflow:auto;line-height:1.5!important}.markdown-body pre.shiki code{background:transparent!important;line-height:1.5!important}.markdown-body pre.shiki code span{background:transparent!important}.sourceview pre.shiki{background:#fff!important;border:1px solid #d0d7de;padding:.4rem 0;overflow:auto;line-height:0.5em!important}.sourceview pre.shiki code{background:transparent!important;line-height:0.5em!important}.sourceview pre.shiki code span{background:transparent!important}`;
 
 function page(title, body) {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)} · Proposals</title><style>
   :root{font:16px/1.55 ui-sans-serif,system-ui,sans-serif;color:#24292f;background:#f6f8fa}body{max-width:1220px;margin:0 auto;padding:2.5rem 1.25rem}a{color:#0969da}main{border-top:3px solid #24292f;padding-top:1.5rem}.grid{display:grid;grid-template-columns:minmax(0,2.2fr) minmax(18rem,1fr);gap:3rem}.meta{font-size:.9rem;border-left:1px solid #d0d7de;padding-left:1.5rem}.metadata,.discovery{border-collapse:collapse;width:100%;font-size:.82rem}.metadata th,.metadata td,.discovery th,.discovery td{border-bottom:1px solid #d8dee4;padding:.45rem;text-align:left;vertical-align:top}.metadata th{white-space:nowrap}.discovery{font-size:.88rem}.discovery tbody.state-group>tr:first-child th{padding-top:1.3rem;text-transform:capitalize}.query{display:flex;gap:.5rem;margin:1rem 0}.query input,.query select{border:1px solid #8c959f;border-radius:5px;padding:.55rem}.status{font-weight:700}.pending{color:#9a6700}.approved{color:#1a7f37}.rejected,.rejected-with-comment,.rejected-complex-or-misformatted{color:#cf222e}textarea{width:100%;min-height:7rem;box-sizing:border-box}button{padding:.55rem .8rem;margin:.25rem;border:1px solid #8c959f;border-radius:5px;background:#fff;cursor:pointer}button:hover{background:#f3f4f6}form{margin-top:1.5rem}.thread{max-width:78ch;margin-top:3rem;border-top:2px solid #24292f;padding-top:1rem}.message{border-top:1px solid #d8dee4;padding:.75rem 0}.messagebox{border:1px solid #8c959f;background:#fff;padding:.75rem}.toolbar,.message-actions{display:flex;gap:.25rem;align-items:center;flex-wrap:wrap}.toolbar button{font-size:.8rem}.toolbar-more{display:inline-block}.toolbar-more summary{cursor:pointer;display:inline-block;border:1px solid #8c959f;border-radius:5px;padding:.55rem .8rem;font-size:.8rem;list-style:none}.toolbar-more summary::-webkit-details-marker{display:none}.toolbar-more[open]{background:#f3f4f6}.toolbar-more button{display:inline-block}.markdown-body{max-width:78ch;font-family:ui-serif,Georgia,serif;font-size:1.04rem}.markdown-body h1,.markdown-body h2,.markdown-body h3{font-family:ui-sans-serif,system-ui,sans-serif;line-height:1.2}.markdown-body img{max-width:100%}.markdown-body pre{overflow:auto;background:#f6f8fa;padding:1rem;border:1px solid #d8dee4;line-height:1.5}.markdown-body code{font-family:ui-monospace,SFMono-Regular,monospace;background:#f1f3f5;padding:.1rem .25rem;border-radius:3px}.diff{white-space:pre-wrap;font:0.8rem/1.5 ui-monospace,SFMono-Regular,monospace;background:#f6f8fa;border:1px solid #d8dee4;padding:1rem;overflow:auto}
-  .sourceview{font:0.85rem/0.8em ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace!important;line-height:0.8em!important;counter-reset:line}
-  .sourceview pre,.sourceview code{font:inherit!important;line-height:0.8em!important}
-  .sourceview pre.shiki{background:#fff!important;border:1px solid #d0d7de;padding:.4rem 0;overflow:auto;line-height:0.8em!important}
-  .sourceview pre.shiki code{display:block;line-height:0.8em!important;background:transparent!important}
-  .sourceview .line{display:block;min-height:0.8em;line-height:0.8em!important;padding:0 1.25rem}
+  .sourceview{font:0.85rem/0.5em ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace!important;line-height:0.5em!important;counter-reset:line}
+  .sourceview pre,.sourceview code{font:inherit!important;line-height:0.5em!important}
+  .sourceview pre.shiki{background:#fff!important;border:1px solid #d0d7de;padding:.4rem 0;overflow:auto;line-height:0.5em!important}
+  .sourceview pre.shiki code{display:block;line-height:0.5em!important;background:transparent!important}
+  .sourceview .line{display:block;min-height:0.5em;line-height:0.5em!important;padding:0 1.25rem}
   .sourceview .line:hover{background:#f6f8fa}
   .sourceview .line.highlighted{background:#fff8c5}
-  .sourceview .line::before{content:counter(line);counter-increment:line;display:inline-block;width:3.5em;margin-right:1.25em;color:#8c959f;text-align:right;user-select:none;line-height:0.8em!important}
-  .preview-popover{position:fixed;z-index:50;max-width:34rem;max-height:22rem;overflow-y:auto;padding:.9rem 1.1rem;background:#fff;border:1px solid #8c959f;border-radius:6px;box-shadow:0 8px 24px rgba(36,41,47,.18);font-size:.88rem;line-height:1.5;color:#24292f}
+  .sourceview .line::before{content:counter(line);counter-increment:line;display:inline-block;width:3.5em;margin-right:1.25em;color:#8c959f;text-align:right;user-select:none;line-height:0.5em!important}
+  .preview-popover{position:fixed;z-index:50;max-width:36rem;max-height:24rem;overflow-y:auto;padding:.9rem 1.1rem;background:#fff;border:1px solid #8c959f;border-radius:6px;box-shadow:0 8px 24px rgba(36,41,47,.18);font-size:.88rem;line-height:1.5;color:#24292f}
   .preview-popover-title{font-weight:700;font-size:.95rem;margin-bottom:.45rem;padding-bottom:.35rem;border-bottom:1px solid #d8dee4;color:#0969da}
   .preview-popover-body{white-space:pre-wrap;word-break:break-word;line-height:1.5}
+  .preview-loading{color:#57606a;font-style:italic}
+  .preview-popover pre.shiki{margin:.4rem 0 0 0;padding:.5rem 0;background:#f6f8fa!important;border:1px solid #d0d7de;border-radius:4px;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-size:.82rem;line-height:1.35!important;overflow-x:auto}
+  .preview-popover pre.shiki code{display:block;background:transparent!important;line-height:1.35!important}
+  .preview-popover .line{display:block;min-height:1.35em;line-height:1.35!important;padding:0 .75rem 0 .25rem}
+  .preview-popover .preview-line-num{display:inline-block;width:3.2em;margin-right:.8em;color:#8c959f;text-align:right;user-select:none}
   .preview-code-block{margin:.4rem 0 0 0;padding:.6rem;background:#f6f8fa;border:1px solid #d0d7de;border-radius:4px;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-size:.82rem;line-height:1.35;overflow-x:auto;white-space:pre}
   .preview-code-line{display:block;min-height:1.35em;line-height:1.35}
-  .preview-line-num{display:inline-block;width:3.2em;margin-right:.8em;color:#8c959f;text-align:right;user-select:none}
   .revision-added{color:#1a7f37}.revision-removed{color:#cf222e}@media(max-width:800px){body{padding:1.25rem}.grid{grid-template-columns:1fr}.meta{border-left:0;border-top:1px solid #d0d7de;padding:1.25rem 0}.discovery{display:block;overflow-x:auto}}
   ${KATEX_CSS}${COMMENT_CSS}${PROPOSAL_UI_CSS}</style></head><body>${body}<script>
   (() => { const source = new EventSource("/events"); source.addEventListener("proposal-updated", () => setTimeout(() => location.reload(), 150));
@@ -629,40 +785,13 @@ function page(title, body) {
       }
     };
 
-    // 1. Code reference preview popup
-    document.querySelectorAll("[data-preview-code]").forEach((link) => {
-      link.addEventListener("mouseenter", async () => {
-        activeLink = link;
-        const rect = link.getBoundingClientRect();
-        showPreview(rect, "<div>Loading source preview…</div>");
-        try {
-          const codeRef = link.dataset.previewCode;
-          const res = await fetch(\`/preview/source?target=\${encodeURIComponent(codeRef)}\`).then((r) => r.json());
-          if (activeLink !== link) return;
-          if (res.error) {
-            showPreview(rect, \`<div class="preview-popover-title">\${esc(codeRef)}</div><div>\${esc(res.error)}</div>\`);
-            return;
-          }
-          const linesHtml = res.lines.map((l) => \`<span class="preview-code-line"><span class="preview-line-num">\${l.num}</span>\${esc(l.text)}</span>\`).join("\\n");
-          const title = \`\${esc(res.file)}\${res.range ? \` · \${esc(res.range)}\` : ""}\${res.commit ? \` @ \${esc(res.commit.slice(0, 8))}\` : ""}\`;
-          showPreview(rect, \`<div class="preview-popover-title">\${title}</div><pre class="preview-code-block"><code>\${linesHtml}</code></pre>\`);
-        } catch {
-          if (activeLink === link) showPreview(rect, "<div>Source preview unavailable</div>");
-        }
-      });
-      link.addEventListener("mouseleave", () => {
-        if (activeLink === link) activeLink = null;
-        scheduleHide();
-      });
-    });
-
-    // 2. Paper reference preview popup (within paper or outside)
-    document.querySelectorAll("[data-preview-anchor], [data-preview]").forEach((link) => {
+    // Hyperlink hover preview popups (SSR preview with simple container hydration)
+    document.querySelectorAll("[data-preview-code], [data-preview], [data-preview-anchor]").forEach((link) => {
       link.addEventListener("mouseenter", async () => {
         activeLink = link;
         const rect = link.getBoundingClientRect();
         const anchor = link.dataset.previewAnchor;
-        if (anchor) {
+        if (anchor && anchor.startsWith("#")) {
           const targetId = anchor.replace(/^#/, "");
           const targetEl = document.getElementById(targetId);
           if (targetEl) {
@@ -685,51 +814,21 @@ function page(title, body) {
           }
         }
 
-        showPreview(rect, "<div>Loading proposal preview…</div>");
+        const target = link.dataset.previewCode || link.dataset.preview || link.dataset.previewAnchor;
+        if (!target) return;
+
+        showPreview(rect, '<div class="preview-loading">Loading preview…</div>');
         try {
-          const url = link.dataset.preview;
-          const html = await fetch(url).then((response) => response.text());
+          const res = await fetch(\`/preview?target=\${encodeURIComponent(target)}\`);
           if (activeLink !== link) return;
-          const doc = new DOMParser().parseFromString(html, "text/html");
-          doc.querySelectorAll(".clause-link").forEach((c) => c.remove());
-          let title = doc.title.replace(" · Proposals", "").replaceAll("¶", "").trim();
-          let excerpt = "";
-          const hash = url.includes("#") ? url.slice(url.indexOf("#") + 1) : "";
-          if (hash) {
-            const targetSec = doc.getElementById(hash);
-            if (targetSec) {
-              const targetTitle = (targetSec.textContent || "").replaceAll("¶", "").trim();
-              if (targetTitle) title = \`\${title} › \${targetTitle}\`;
-              let sib = targetSec.nextElementSibling;
-              const parts = [];
-              while (sib && !/^H[1-6]$/i.test(sib.tagName)) {
-                const clone = sib.cloneNode(true);
-                clone.querySelectorAll(".clause-link").forEach((c) => c.remove());
-                const text = (clone.innerText || clone.textContent || "").replaceAll("¶", "").trim();
-                if (text) parts.push(text);
-                sib = sib.nextElementSibling;
-                if (parts.length >= 4) break;
-              }
-              excerpt = parts.join("\\n\\n");
-            }
+          const html = await res.text();
+          if (preview) {
+            preview.innerHTML = html;
           }
-          if (!excerpt) {
-            const article = doc.querySelector(".markdown-body");
-            if (article) {
-              const pEls = [...article.querySelectorAll("p, li, blockquote, pre")].slice(0, 5);
-              excerpt = pEls.map((p) => {
-                const clone = p.cloneNode(true);
-                clone.querySelectorAll(".clause-link").forEach((c) => c.remove());
-                return (clone.innerText || clone.textContent || "").replaceAll("¶", "").trim();
-              }).filter(Boolean).join("\\n\\n");
-            }
-          }
-          if (!excerpt) {
-            excerpt = (doc.body.innerText || doc.body.textContent || "").replaceAll("¶", "").slice(0, 420);
-          }
-          showPreview(rect, \`<div class="preview-popover-title">\${esc(title)}</div><div class="preview-popover-body">\${esc(excerpt.slice(0, 600))}</div>\`);
         } catch {
-          if (activeLink === link) showPreview(rect, "<div>Preview unavailable</div>");
+          if (activeLink === link && preview) {
+            preview.innerHTML = '<div class="preview-popover-body">Preview unavailable</div>';
+          }
         }
       });
       link.addEventListener("mouseleave", () => {
@@ -860,8 +959,15 @@ async function serve([portArg]) {
       const sourceMatch = url.pathname.match(/^\/source\/([^/]+)(?:\/revision\/([^/]+))?$/);
       const actionMatch = url.pathname.match(/^\/proposal\/([^/]+)\/(review|message)$/);
       if (request.method === "GET" && url.pathname === "/events") return streamFor(request);
+      if (request.method === "GET" && url.pathname === "/preview") {
+        const target = url.searchParams.get("target") ?? url.searchParams.get("file") ?? "";
+        return previewResponse(db, target, url, request);
+      }
       if (request.method === "GET" && url.pathname === "/preview/source") {
         const target = url.searchParams.get("target") ?? url.searchParams.get("file") ?? "";
+        if (url.searchParams.get("format") === "html" || request.headers.get("accept")?.includes("text/html")) {
+          return previewResponse(db, target, url, request);
+        }
         return sourcePreviewResponse(target, url);
       }
       if (request.method === "GET" && url.pathname === "/") return new Response(viewerIndex(db, url), { headers: { "content-type": "text/html; charset=utf-8" } });
