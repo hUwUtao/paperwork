@@ -1,11 +1,11 @@
 ---
-name: paper-proposals
+name: propose
 description: Write and submit formal RFC-style design proposals with explicit human review, immutable submissions, and tracked feedback.
 metadata:
   short-description: Write and submit RFC design papers for human review
 ---
 
-# Paper proposals
+# Proposals
 
 Use this skill for design incubation. Submit one paper for each component with its own approval boundary. Components may declare prerequisites, dependents, and a parallel group in front matter.
 
@@ -32,14 +32,14 @@ Include sections for problem and scope, context and evidence, proposed design, i
 
 ## Submit and track review
 
-After installing the `paper-proposals` package in the target repository, use the CLI from that repository:
+After installing the `proposals` package in the target repository, use the CLI from that repository:
 
 ```sh
-paper-proposals init
-paper-proposals new <tag> <title> <component>
-paper-proposals submit <tag> <path/to/PROPOSAL.md>
-paper-proposals status
-paper-proposals serve
+proposals init
+proposals new <tag> <title> <component>
+proposals submit <tag> <path/to/PROPOSAL.md>
+proposals status
+proposals serve
 ```
 
 The workspace defaults to `.agents/paperwork/proposals` under the current repository. `PAPER_PROPOSALS_ROOT` overrides that location. In this source checkout, `./proposals` is an equivalent local wrapper.

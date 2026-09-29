@@ -1,5 +1,5 @@
 {
-  "name": "paper-proposals",
+  "name": "proposals",
   "version": "0.1.0",
   "description": "RFC proposal workflow with human review and an SSR viewer",
   "repository": {
@@ -13,7 +13,7 @@
     "bun"
   ],
   "bin": {
-    "paper-proposals": "cli/paper-proposals.js"
+    "proposals": "cli/proposals.js"
   },
   "files": [
     "cli",
@@ -26,8 +26,8 @@
     "bun": ">=1.2.0"
   },
   "scripts": {
-    "paper": "bun cli/paper-proposals.js",
-    "viewer": "bun cli/paper-proposals.js serve",
+    "paper": "bun cli/proposals.js",
+    "viewer": "bun cli/proposals.js serve",
     "test": "bun test"
   },
   "dependencies": {

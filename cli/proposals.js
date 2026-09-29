@@ -71,15 +71,15 @@ function die(message, code = 1) {
 
 function usage() {
   console.error(`usage:
-  paper-proposals.js init
-  paper-proposals.js new TAG TITLE COMPONENT
-  paper-proposals.js submit TAG PROPOSAL.md
-  paper-proposals.js revision TAG PROPOSAL.md
-  paper-proposals.js review --human TAG STATE COMMENT
-  paper-proposals.js review --human TAG STATE COMMENT --revision NNN
-  paper-proposals.js message TAG ACTOR ACTION MESSAGE
-  paper-proposals.js status [TAG]
-  paper-proposals.js serve [PORT]`);
+  proposals init
+  proposals new TAG TITLE COMPONENT
+  proposals submit TAG PROPOSAL.md
+  proposals revision TAG PROPOSAL.md
+  proposals review --human TAG STATE COMMENT
+  proposals review --human TAG STATE COMMENT --revision NNN
+  proposals message TAG ACTOR ACTION MESSAGE
+  proposals status [TAG]
+  proposals serve [PORT]`);
   process.exit(2);
 }
 
@@ -403,7 +403,7 @@ function gitSourceView(url) {
   const file = url.searchParams.get("file") ?? "";
   const ref = url.searchParams.get("ref") ?? "HEAD";
   if (!/^[A-Za-z0-9._/-]+$/.test(file) || file.split("/").includes("..")) return new Response("Invalid source path", { status: 400 });
-  const aliases = { ".agents/skills/paper-proposals/SKILL.md": "skills/paper-proposals/SKILL.md", ".agents/skills/paper-proposals/scripts/paper-proposals.js": "cli/paper-proposals.js" };
+  const aliases = { ".agents/skills/paper-proposals/SKILL.md": "skills/propose/SKILL.md", "skills/paper-proposals/SKILL.md": "skills/propose/SKILL.md", ".agents/skills/paper-proposals/scripts/paper-proposals.js": "cli/paper-proposals.js" };
   const sourceFile = aliases[file] ?? file;
   const result = spawnSync("git", ["show", `${ref}:${sourceFile}`], { encoding: "utf8" });
   const source = result.status === 0 ? result.stdout : existsSync(resolve(sourceFile)) ? readFileSync(resolve(sourceFile), "utf8") : null;
@@ -415,14 +415,14 @@ function gitSourceView(url) {
 const COMMENT_CSS = `.message-actions{position:relative;justify-content:flex-end}.toolbar-more,.review-menu-wrap{position:relative;display:inline-block}.toolbar-more summary{cursor:pointer;display:inline-block;border:1px solid #8c959f;border-radius:5px;padding:.55rem .8rem;font-size:.8rem;list-style:none}.toolbar-more summary::-webkit-details-marker{display:none}.floating-menu{position:absolute;z-index:4;min-width:14rem;padding:.35rem;background:#fff;border:1px solid #8c959f;border-radius:6px;box-shadow:0 8px 24px #24292f26}.floating-menu button{display:block;width:100%;margin:0;border:0;text-align:left}.more-menu{top:calc(100% + .4rem);left:0}.review-menu{right:0;bottom:calc(100% + .4rem)}.form-message{margin:.5rem 0;color:#cf222e;font-size:.9rem}button:focus-visible,summary:focus-visible{outline:2px solid #0969da;outline-offset:2px}@media(max-width:800px){.floating-menu{max-width:calc(100vw - 1.5rem);min-width:0}}`;
 
 function page(title, body) {
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)} · Paper Proposals</title><style>
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)} · Proposals</title><style>
   :root{font:16px/1.55 ui-sans-serif,system-ui,sans-serif;color:#24292f;background:#f6f8fa}body{max-width:1220px;margin:0 auto;padding:2.5rem 1.25rem}a{color:#0969da}main{border-top:3px solid #24292f;padding-top:1.5rem}.grid{display:grid;grid-template-columns:minmax(0,2.2fr) minmax(18rem,1fr);gap:3rem}.meta{font-size:.9rem;border-left:1px solid #d0d7de;padding-left:1.5rem}.metadata,.discovery{border-collapse:collapse;width:100%;font-size:.82rem}.metadata th,.metadata td,.discovery th,.discovery td{border-bottom:1px solid #d8dee4;padding:.45rem;text-align:left;vertical-align:top}.metadata th{white-space:nowrap}.discovery{font-size:.88rem}.discovery tbody.state-group>tr:first-child th{padding-top:1.3rem;text-transform:capitalize}.query{display:flex;gap:.5rem;margin:1rem 0}.query input,.query select{border:1px solid #8c959f;border-radius:5px;padding:.55rem}.status{font-weight:700}.pending{color:#9a6700}.approved{color:#1a7f37}.rejected,.rejected-with-comment,.rejected-complex-or-misformatted{color:#cf222e}textarea{width:100%;min-height:7rem;box-sizing:border-box}button{padding:.55rem .8rem;margin:.25rem;border:1px solid #8c959f;border-radius:5px;background:#fff;cursor:pointer}button:hover{background:#f3f4f6}form{margin-top:1.5rem}.thread{max-width:78ch;margin-top:3rem;border-top:2px solid #24292f;padding-top:1rem}.message{border-top:1px solid #d8dee4;padding:.75rem 0}.messagebox{border:1px solid #8c959f;background:#fff;padding:.75rem}.toolbar,.message-actions{display:flex;gap:.25rem;align-items:center;flex-wrap:wrap}.toolbar button{font-size:.8rem}.toolbar-more{display:inline-block}.toolbar-more summary{cursor:pointer;display:inline-block;border:1px solid #8c959f;border-radius:5px;padding:.55rem .8rem;font-size:.8rem;list-style:none}.toolbar-more summary::-webkit-details-marker{display:none}.toolbar-more[open]{background:#f3f4f6}.toolbar-more button{display:inline-block}.markdown-body{max-width:78ch;font-family:ui-serif,Georgia,serif;font-size:1.04rem}.markdown-body h1,.markdown-body h2,.markdown-body h3{font-family:ui-sans-serif,system-ui,sans-serif;line-height:1.2}.markdown-body img{max-width:100%}.markdown-body pre{overflow:auto;background:#f6f8fa;padding:1rem;border:1px solid #d8dee4}.markdown-body code{font-family:ui-monospace,SFMono-Regular,monospace;background:#f1f3f5;padding:.1rem .25rem;border-radius:3px}.diff{white-space:pre-wrap;font:0.8rem/1.5 ui-monospace,SFMono-Regular,monospace;background:#f6f8fa;border:1px solid #d8dee4;padding:1rem;overflow:auto}.sourceview{font:0.84rem/1.55 ui-monospace,SFMono-Regular,monospace;counter-reset:line}.sourceview .line{display:block}.sourceview .line::before{content:counter(line);counter-increment:line;display:inline-block;width:3.5em;margin-right:1em;color:#8c959f;text-align:right;user-select:none}.preview-popover{position:fixed;z-index:5;max-width:22rem;padding:.8rem;background:#fff;border:1px solid #8c959f;box-shadow:0 8px 24px #24292f26;font-size:.85rem}.revision-added{color:#1a7f37}.revision-removed{color:#cf222e}@media(max-width:800px){body{padding:1.25rem}.grid{grid-template-columns:1fr}.meta{border-left:0;border-top:1px solid #d0d7de;padding:1.25rem 0}.discovery{display:block;overflow-x:auto}}
   ${KATEX_CSS}${COMMENT_CSS}</style></head><body>${body}<script>
   (() => { const source = new EventSource("/events"); source.addEventListener("proposal-updated", () => setTimeout(() => location.reload(), 150));
     const blocks = [...document.querySelectorAll("pre code.language-mermaid")];
     if (blocks.length) import("https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs").then(({default: mermaid}) => { blocks.forEach((block) => { const diagram = document.createElement("div"); diagram.className = "mermaid"; diagram.textContent = block.textContent; block.closest("pre").replaceWith(diagram); }); mermaid.initialize({startOnLoad:false,securityLevel:"strict"}); return mermaid.run(); }).catch(() => {});
     let preview;
-    document.querySelectorAll("[data-preview]").forEach((link) => { link.addEventListener("mouseenter", async () => { preview?.remove(); preview = document.createElement("div"); preview.className = "preview-popover"; preview.textContent = "Loading preview…"; document.body.append(preview); const rect = link.getBoundingClientRect(); preview.style.left = Math.min(rect.left, innerWidth - 360) + "px"; preview.style.top = (rect.bottom + 8) + "px"; try { const html = await fetch(link.dataset.preview).then((response) => response.text()); const doc = new DOMParser().parseFromString(html, "text/html"); preview.innerHTML = "<strong>" + doc.title.replace(" · Paper Proposals", "") + "</strong><br>" + (doc.querySelector(".markdown-body")?.innerText || doc.body.innerText).slice(0, 420); } catch { preview.textContent = "Preview unavailable"; } }); link.addEventListener("mouseleave", () => { setTimeout(() => preview?.remove(), 180); }); });
+    document.querySelectorAll("[data-preview]").forEach((link) => { link.addEventListener("mouseenter", async () => { preview?.remove(); preview = document.createElement("div"); preview.className = "preview-popover"; preview.textContent = "Loading preview…"; document.body.append(preview); const rect = link.getBoundingClientRect(); preview.style.left = Math.min(rect.left, innerWidth - 360) + "px"; preview.style.top = (rect.bottom + 8) + "px"; try { const html = await fetch(link.dataset.preview).then((response) => response.text()); const doc = new DOMParser().parseFromString(html, "text/html"); preview.innerHTML = "<strong>" + doc.title.replace(" · Proposals", "") + "</strong><br>" + (doc.querySelector(".markdown-body")?.innerText || doc.body.innerText).slice(0, 420); } catch { preview.textContent = "Preview unavailable"; } }); link.addEventListener("mouseleave", () => { setTimeout(() => preview?.remove(), 180); }); });
     const editor = document.getElementById("message-editor"); const previewPane = document.getElementById("message-preview");
     document.querySelectorAll("[data-markdown]").forEach((button) => button.addEventListener("click", () => { const [before, after] = button.dataset.markdown.split("|"); const start = editor.selectionStart; const end = editor.selectionEnd; const selected = editor.value.slice(start, end) || "text"; editor.setRangeText(before + selected + after, start, end, "select"); editor.focus(); }));
     const form = document.getElementById("message-form"); const reviewTrigger = document.getElementById("review-trigger"); const reviewMenu = document.getElementById("review-menu"); const validation = document.getElementById("review-validation"); const reviewItems = [...(reviewMenu?.querySelectorAll('[role="menuitem"]') ?? [])];
@@ -582,7 +582,7 @@ async function serve([portArg]) {
     },
   });
   process.once("SIGINT", () => { clearInterval(watcher); server.stop(); });
-  console.log(`Paper Proposals viewer: http://${server.hostname}:${server.port}`);
+  console.log(`Proposals viewer: http://${server.hostname}:${server.port}`);
 }
 
 const [command, ...args] = process.argv.slice(2);
