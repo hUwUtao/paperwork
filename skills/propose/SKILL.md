@@ -79,7 +79,7 @@ When a newer revision is submitted, older pending revisions are automatically ma
 
 After approval, follow the accepted design and stage work according to its dependency graph. After rejection, respond in `MESSAGES.md` and resubmit the revision for review. Preserve the submitted paper as the review record.
 
-## Do not
+## Requirements
 
 - Do not implement or claim implementation readiness before human approval.
 - Do not silently rewrite a submitted `PROPOSAL.md`.
@@ -92,3 +92,4 @@ After approval, follow the accepted design and stage work according to its depen
 - A graphical or visualization proposal MUST include a visual sample artifact, such as a raster image or other directly viewable sample. Markdown, HTML, Mermaid, or SVG alone is not sufficient.
 - Do not impersonate a human in discussion or review records. LLM-authored entries MUST use the `llm` actor; only a human action may use the `human` actor.
 - Describe visual sample provenance plainly and positively. Do not use defensive wording or contrast the sample with generation methods unless that detail is materially relevant.
+- Logical route might need flow diagram such as mermaid. Algorithm route should be declared by either (prefers both) Latex expression or Sample code snippet in destined language. If no language present or too vague, do pseudocode in python.
