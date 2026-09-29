@@ -20,6 +20,19 @@ const highlighter = await createHighlighter({
   langs: ["javascript", "typescript", "json", "bash", "shellscript", "rust", "python", "markdown", "yaml", "toml", "sql", "html", "css", "diff", "text"],
 });
 
+function resolveProposalTag(href) {
+  if (!href || isExternalUrl(href)) return null;
+  const clean = href.split(/[?#]/)[0];
+  const tagMatch = clean.match(/(?:^|\/|\.\.\/|\.\/)(?:proposal\/)?([0-9]{3}[A-Za-z0-9_-]*)(?:\/(?:PROPOSAL|proposal)\.md)?$/i);
+  if (tagMatch) {
+    const candidateTag = tagMatch[1];
+    if (existsSync(join(ROOT, candidateTag, "PROPOSAL.md")) || existsSync(join(ROOT, candidateTag, "proposal.md"))) {
+      return candidateTag;
+    }
+  }
+  return null;
+}
+
 marked.use({
   gfm: true,
   renderer: {
@@ -29,6 +42,11 @@ marked.use({
       try { return highlighter.codeToHtml(text, { lang: highlighter.getLoadedLanguages().includes(language) ? language : "text", theme: "github-light" }); } catch { return `<pre><code>${escapeHtml(text)}</code></pre>`; }
     },
     codespan({ text }) {
+      const proposalTag = resolveProposalTag(text);
+      if (proposalTag) {
+        const hash = text.includes("#") ? text.slice(text.indexOf("#")) : "";
+        return `<a class="paper-link" data-preview="/proposal/${encodeURIComponent(proposalTag)}${hash}" href="/proposal/${encodeURIComponent(proposalTag)}${hash}" title="Open proposal ${escapeHtml(proposalTag)}"><code>${escapeHtml(text)}</code></a>`;
+      }
       const parsed = parseCodeReference(text);
       const ext = parsed?.filePath?.split(".")?.pop()?.toLowerCase();
       if (parsed && ext && SOURCE_EXTENSIONS.has(ext)) {
@@ -43,6 +61,11 @@ marked.use({
       const titleAttr = title ? ` title="${escapeHtml(title)}"` : "";
       if (href.startsWith("#")) {
         return `<a class="internal-link" data-preview-anchor="${escapeHtml(href)}" href="${escapeHtml(href)}"${titleAttr}>${text}</a>`;
+      }
+      const proposalTag = resolveProposalTag(href);
+      if (proposalTag) {
+        const hash = href.includes("#") ? href.slice(href.indexOf("#")) : "";
+        return `<a class="paper-link" data-preview="/proposal/${encodeURIComponent(proposalTag)}${hash}" href="/proposal/${encodeURIComponent(proposalTag)}${hash}"${titleAttr}>${text}</a>`;
       }
       const parsed = parseCodeReference(href);
       const ext = parsed?.filePath?.split(".")?.pop()?.toLowerCase();
@@ -555,75 +578,88 @@ function gitSourceView(url) {
 }
 
 const COMMENT_CSS = `.message-actions{position:relative;justify-content:flex-end}.toolbar-more,.review-menu-wrap{position:relative;display:inline-block}.toolbar-more summary{cursor:pointer;display:inline-block;border:1px solid #8c959f;border-radius:5px;padding:.55rem .8rem;font-size:.8rem;list-style:none}.toolbar-more summary::-webkit-details-marker{display:none}.floating-menu{position:absolute;z-index:4;min-width:14rem;padding:.35rem;background:#fff;border:1px solid #8c959f;border-radius:6px;box-shadow:0 8px 24px #24292f26}.floating-menu button{display:block;width:100%;margin:0;border:0;text-align:left}.more-menu{top:calc(100% + .4rem);left:0}.review-menu{right:0;bottom:calc(100% + .4rem)}.form-message{margin:.5rem 0;color:#cf222e;font-size:.9rem}button:focus-visible,summary:focus-visible{outline:2px solid #0969da;outline-offset:2px}@media(max-width:800px){.floating-menu{max-width:calc(100vw - 1.5rem);min-width:0}}`;
-const PROPOSAL_UI_CSS = `.metadata,.discovery{border:1px solid #8c959f;border-collapse:collapse}.metadata th,.metadata td,.discovery th,.discovery td{border:1px solid #d0d7de}.metadata thead th,.discovery thead th{background:#f6f8fa;border-bottom:2px solid #8c959f}.discovery tbody.state-group>tr:first-child th{border-top:2px solid #8c959f}.markdown-body :not(pre)>code{background:#f1f3f5;padding:.1rem .25rem;border-radius:3px}.markdown-body pre code{display:block;background:transparent!important;padding:0;border-radius:0;line-height:1.6}.markdown-body pre.shiki,.sourceview pre.shiki{background:#fff!important;border:1px solid #d0d7de;padding:1rem 0;overflow:auto;line-height:1.6!important}.markdown-body pre.shiki code,.sourceview pre.shiki code{background:transparent!important;line-height:1.6!important}.markdown-body pre.shiki code span,.sourceview pre.shiki code span{background:transparent!important}`;
+const PROPOSAL_UI_CSS = `.metadata,.discovery{border:1px solid #8c959f;border-collapse:collapse}.metadata th,.metadata td,.discovery th,.discovery td{border:1px solid #d0d7de}.metadata thead th,.discovery thead th{background:#f6f8fa;border-bottom:2px solid #8c959f}.discovery tbody.state-group>tr:first-child th{border-top:2px solid #8c959f}.markdown-body :not(pre)>code{background:#f1f3f5;padding:.1rem .25rem;border-radius:3px}.markdown-body pre code{display:block;background:transparent!important;padding:0;border-radius:0;line-height:1.5}.markdown-body pre.shiki{background:#fff!important;border:1px solid #d0d7de;padding:1rem 0;overflow:auto;line-height:1.5!important}.markdown-body pre.shiki code{background:transparent!important;line-height:1.5!important}.markdown-body pre.shiki code span{background:transparent!important}.sourceview pre.shiki{background:#fff!important;border:1px solid #d0d7de;padding:.4rem 0;overflow:auto;line-height:0.5em!important}.sourceview pre.shiki code{background:transparent!important;line-height:0.5em!important}.sourceview pre.shiki code span{background:transparent!important}`;
 
 function page(title, body) {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)} · Proposals</title><style>
   :root{font:16px/1.55 ui-sans-serif,system-ui,sans-serif;color:#24292f;background:#f6f8fa}body{max-width:1220px;margin:0 auto;padding:2.5rem 1.25rem}a{color:#0969da}main{border-top:3px solid #24292f;padding-top:1.5rem}.grid{display:grid;grid-template-columns:minmax(0,2.2fr) minmax(18rem,1fr);gap:3rem}.meta{font-size:.9rem;border-left:1px solid #d0d7de;padding-left:1.5rem}.metadata,.discovery{border-collapse:collapse;width:100%;font-size:.82rem}.metadata th,.metadata td,.discovery th,.discovery td{border-bottom:1px solid #d8dee4;padding:.45rem;text-align:left;vertical-align:top}.metadata th{white-space:nowrap}.discovery{font-size:.88rem}.discovery tbody.state-group>tr:first-child th{padding-top:1.3rem;text-transform:capitalize}.query{display:flex;gap:.5rem;margin:1rem 0}.query input,.query select{border:1px solid #8c959f;border-radius:5px;padding:.55rem}.status{font-weight:700}.pending{color:#9a6700}.approved{color:#1a7f37}.rejected,.rejected-with-comment,.rejected-complex-or-misformatted{color:#cf222e}textarea{width:100%;min-height:7rem;box-sizing:border-box}button{padding:.55rem .8rem;margin:.25rem;border:1px solid #8c959f;border-radius:5px;background:#fff;cursor:pointer}button:hover{background:#f3f4f6}form{margin-top:1.5rem}.thread{max-width:78ch;margin-top:3rem;border-top:2px solid #24292f;padding-top:1rem}.message{border-top:1px solid #d8dee4;padding:.75rem 0}.messagebox{border:1px solid #8c959f;background:#fff;padding:.75rem}.toolbar,.message-actions{display:flex;gap:.25rem;align-items:center;flex-wrap:wrap}.toolbar button{font-size:.8rem}.toolbar-more{display:inline-block}.toolbar-more summary{cursor:pointer;display:inline-block;border:1px solid #8c959f;border-radius:5px;padding:.55rem .8rem;font-size:.8rem;list-style:none}.toolbar-more summary::-webkit-details-marker{display:none}.toolbar-more[open]{background:#f3f4f6}.toolbar-more button{display:inline-block}.markdown-body{max-width:78ch;font-family:ui-serif,Georgia,serif;font-size:1.04rem}.markdown-body h1,.markdown-body h2,.markdown-body h3{font-family:ui-sans-serif,system-ui,sans-serif;line-height:1.2}.markdown-body img{max-width:100%}.markdown-body pre{overflow:auto;background:#f6f8fa;padding:1rem;border:1px solid #d8dee4;line-height:1.5}.markdown-body code{font-family:ui-monospace,SFMono-Regular,monospace;background:#f1f3f5;padding:.1rem .25rem;border-radius:3px}.diff{white-space:pre-wrap;font:0.8rem/1.5 ui-monospace,SFMono-Regular,monospace;background:#f6f8fa;border:1px solid #d8dee4;padding:1rem;overflow:auto}
-  .sourceview{font:0.85rem/1.6 ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace!important;counter-reset:line}
-  .sourceview pre,.sourceview code{font:inherit!important;line-height:1.6!important}
-  .sourceview pre.shiki{background:#fff!important;border:1px solid #d0d7de;padding:1rem 0;overflow:auto;line-height:1.6!important}
-  .sourceview pre.shiki code{display:block;line-height:1.6!important;background:transparent!important}
-  .sourceview .line{display:block;min-height:1.6em;line-height:1.6!important;padding:0 1.25rem}
+  .sourceview{font:0.85rem/0.5em ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace!important;line-height:0.5em!important;counter-reset:line}
+  .sourceview pre,.sourceview code{font:inherit!important;line-height:0.5em!important}
+  .sourceview pre.shiki{background:#fff!important;border:1px solid #d0d7de;padding:.4rem 0;overflow:auto;line-height:0.5em!important}
+  .sourceview pre.shiki code{display:block;line-height:0.5em!important;background:transparent!important}
+  .sourceview .line{display:block;min-height:0.5em;line-height:0.5em!important;padding:0 1.25rem}
   .sourceview .line:hover{background:#f6f8fa}
   .sourceview .line.highlighted{background:#fff8c5}
-  .sourceview .line::before{content:counter(line);counter-increment:line;display:inline-block;width:3.5em;margin-right:1.25em;color:#8c959f;text-align:right;user-select:none;line-height:1.6!important}
-  .preview-popover{position:fixed;z-index:50;max-width:34rem;max-height:22rem;overflow-y:auto;padding:.9rem 1.1rem;background:#fff;border:1px solid #8c959f;border-radius:6px;box-shadow:0 8px 24px rgba(36,41,47,.18);font-size:.88rem;line-height:1.55;color:#24292f}
+  .sourceview .line::before{content:counter(line);counter-increment:line;display:inline-block;width:3.5em;margin-right:1.25em;color:#8c959f;text-align:right;user-select:none;line-height:0.5em!important}
+  .preview-popover{position:fixed;z-index:50;max-width:34rem;max-height:22rem;overflow-y:auto;padding:.9rem 1.1rem;background:#fff;border:1px solid #8c959f;border-radius:6px;box-shadow:0 8px 24px rgba(36,41,47,.18);font-size:.88rem;line-height:1.5;color:#24292f}
   .preview-popover-title{font-weight:700;font-size:.95rem;margin-bottom:.45rem;padding-bottom:.35rem;border-bottom:1px solid #d8dee4;color:#0969da}
-  .preview-popover-body{white-space:pre-wrap;word-break:break-word;line-height:1.55}
-  .preview-code-block{margin:.4rem 0 0 0;padding:.6rem;background:#f6f8fa;border:1px solid #d0d7de;border-radius:4px;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-size:.82rem;line-height:1.6;overflow-x:auto;white-space:pre}
-  .preview-code-line{display:block;min-height:1.6em;line-height:1.6}
+  .preview-popover-body{white-space:pre-wrap;word-break:break-word;line-height:1.5}
+  .preview-code-block{margin:.4rem 0 0 0;padding:.6rem;background:#f6f8fa;border:1px solid #d0d7de;border-radius:4px;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-size:.82rem;line-height:1.35;overflow-x:auto;white-space:pre}
+  .preview-code-line{display:block;min-height:1.35em;line-height:1.35}
   .preview-line-num{display:inline-block;width:3.2em;margin-right:.8em;color:#8c959f;text-align:right;user-select:none}
   .revision-added{color:#1a7f37}.revision-removed{color:#cf222e}@media(max-width:800px){body{padding:1.25rem}.grid{grid-template-columns:1fr}.meta{border-left:0;border-top:1px solid #d0d7de;padding:1.25rem 0}.discovery{display:block;overflow-x:auto}}
   ${KATEX_CSS}${COMMENT_CSS}${PROPOSAL_UI_CSS}</style></head><body>${body}<script>
   (() => { const source = new EventSource("/events"); source.addEventListener("proposal-updated", () => setTimeout(() => location.reload(), 150));
+    const esc = (s) => String(s ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#39;");
     const blocks = [...document.querySelectorAll("pre code.language-mermaid")];
     if (blocks.length) import("https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs").then(({default: mermaid}) => { blocks.forEach((block) => { const diagram = document.createElement("div"); diagram.className = "mermaid"; diagram.textContent = block.textContent; block.closest("pre").replaceWith(diagram); }); mermaid.initialize({startOnLoad:false,securityLevel:"strict"}); return mermaid.run(); }).catch(() => {});
     
-    let preview;
+    let preview = null;
+    let hideTimer = null;
+    let activeLink = null;
+    const cancelHide = () => { if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; } };
+    const scheduleHide = () => { cancelHide(); hideTimer = setTimeout(() => { preview?.remove(); preview = null; }, 200); };
     const showPreview = (rect, html) => {
+      cancelHide();
       preview?.remove();
       preview = document.createElement("div");
       preview.className = "preview-popover";
       preview.innerHTML = html;
+      preview.addEventListener("mouseenter", cancelHide);
+      preview.addEventListener("mouseleave", scheduleHide);
       document.body.append(preview);
-      const popoverWidth = Math.min(innerWidth - 32, 544);
+      const popoverWidth = Math.min(innerWidth - 32, 560);
       const left = Math.max(16, Math.min(rect.left, innerWidth - popoverWidth - 16));
       preview.style.left = left + "px";
       const spaceBelow = innerHeight - rect.bottom;
-      if (spaceBelow < 200 && rect.top > 220) {
+      if (spaceBelow < 220 && rect.top > 240) {
         preview.style.bottom = (innerHeight - rect.top + 8) + "px";
       } else {
         preview.style.top = (rect.bottom + 8) + "px";
       }
     };
-    const hidePreview = () => { setTimeout(() => preview?.remove(), 180); };
 
     // 1. Code reference preview popup
     document.querySelectorAll("[data-preview-code]").forEach((link) => {
       link.addEventListener("mouseenter", async () => {
+        activeLink = link;
         const rect = link.getBoundingClientRect();
         showPreview(rect, "<div>Loading source preview…</div>");
         try {
           const codeRef = link.dataset.previewCode;
           const res = await fetch(\`/preview/source?target=\${encodeURIComponent(codeRef)}\`).then((r) => r.json());
+          if (activeLink !== link) return;
           if (res.error) {
-            showPreview(rect, \`<div class="preview-popover-title">\${escapeHtml(codeRef)}</div><div>\${escapeHtml(res.error)}</div>\`);
+            showPreview(rect, \`<div class="preview-popover-title">\${esc(codeRef)}</div><div>\${esc(res.error)}</div>\`);
             return;
           }
-          const linesHtml = res.lines.map((l) => \`<span class="preview-code-line"><span class="preview-line-num">\${l.num}</span>\${escapeHtml(l.text)}</span>\`).join("\\n");
-          const title = \`\${escapeHtml(res.file)}\${res.range ? \` · \${escapeHtml(res.range)}\` : ""}\${res.commit ? \` @ \${escapeHtml(res.commit.slice(0, 8))}\` : ""}\`;
+          const linesHtml = res.lines.map((l) => \`<span class="preview-code-line"><span class="preview-line-num">\${l.num}</span>\${esc(l.text)}</span>\`).join("\\n");
+          const title = \`\${esc(res.file)}\${res.range ? \` · \${esc(res.range)}\` : ""}\${res.commit ? \` @ \${esc(res.commit.slice(0, 8))}\` : ""}\`;
           showPreview(rect, \`<div class="preview-popover-title">\${title}</div><pre class="preview-code-block"><code>\${linesHtml}</code></pre>\`);
         } catch {
-          showPreview(rect, "<div>Source preview unavailable</div>");
+          if (activeLink === link) showPreview(rect, "<div>Source preview unavailable</div>");
         }
       });
-      link.addEventListener("mouseleave", hidePreview);
+      link.addEventListener("mouseleave", () => {
+        if (activeLink === link) activeLink = null;
+        scheduleHide();
+      });
     });
 
     // 2. Paper reference preview popup (within paper or outside)
     document.querySelectorAll("[data-preview-anchor], [data-preview]").forEach((link) => {
       link.addEventListener("mouseenter", async () => {
+        activeLink = link;
         const rect = link.getBoundingClientRect();
         const anchor = link.dataset.previewAnchor;
         if (anchor) {
@@ -633,7 +669,6 @@ function page(title, body) {
             const titleClone = targetEl.cloneNode(true);
             titleClone.querySelectorAll(".clause-link").forEach((c) => c.remove());
             const cleanTitle = (titleClone.textContent || "").replaceAll("¶", "").trim();
-            const targetDepth = parseInt(targetEl.tagName.replace(/^H/i, ""), 10) || 6;
             let sib = targetEl.nextElementSibling;
             const parts = [];
             while (sib && !/^H[1-6]$/i.test(sib.tagName)) {
@@ -644,8 +679,8 @@ function page(title, body) {
               sib = sib.nextElementSibling;
               if (parts.length >= 4) break;
             }
-            const excerpt = parts.join("\\n\\n").slice(0, 500);
-            showPreview(rect, \`<div class="preview-popover-title">\${escapeHtml(cleanTitle)}</div><div class="preview-popover-body">\${escapeHtml(excerpt || "Section referenced")}</div>\`);
+            const excerpt = parts.join("\\n\\n").slice(0, 600);
+            showPreview(rect, \`<div class="preview-popover-title">\${esc(cleanTitle)}</div><div class="preview-popover-body">\${esc(excerpt || "Section referenced")}</div>\`);
             return;
           }
         }
@@ -654,21 +689,26 @@ function page(title, body) {
         try {
           const url = link.dataset.preview;
           const html = await fetch(url).then((response) => response.text());
+          if (activeLink !== link) return;
           const doc = new DOMParser().parseFromString(html, "text/html");
           doc.querySelectorAll(".clause-link").forEach((c) => c.remove());
-          const title = doc.title.replace(" · Proposals", "").replaceAll("¶", "").trim();
+          let title = doc.title.replace(" · Proposals", "").replaceAll("¶", "").trim();
           let excerpt = "";
           const hash = url.includes("#") ? url.slice(url.indexOf("#") + 1) : "";
           if (hash) {
             const targetSec = doc.getElementById(hash);
             if (targetSec) {
+              const targetTitle = (targetSec.textContent || "").replaceAll("¶", "").trim();
+              if (targetTitle) title = \`\${title} › \${targetTitle}\`;
               let sib = targetSec.nextElementSibling;
               const parts = [];
               while (sib && !/^H[1-6]$/i.test(sib.tagName)) {
-                const text = (sib.innerText || sib.textContent || "").replaceAll("¶", "").trim();
+                const clone = sib.cloneNode(true);
+                clone.querySelectorAll(".clause-link").forEach((c) => c.remove());
+                const text = (clone.innerText || clone.textContent || "").replaceAll("¶", "").trim();
                 if (text) parts.push(text);
                 sib = sib.nextElementSibling;
-                if (parts.length >= 3) break;
+                if (parts.length >= 4) break;
               }
               excerpt = parts.join("\\n\\n");
             }
@@ -676,19 +716,26 @@ function page(title, body) {
           if (!excerpt) {
             const article = doc.querySelector(".markdown-body");
             if (article) {
-              const pEls = [...article.querySelectorAll("p, li, blockquote")].slice(0, 4);
-              excerpt = pEls.map((p) => (p.innerText || p.textContent || "").replaceAll("¶", "").trim()).filter(Boolean).join("\\n\\n");
+              const pEls = [...article.querySelectorAll("p, li, blockquote, pre")].slice(0, 5);
+              excerpt = pEls.map((p) => {
+                const clone = p.cloneNode(true);
+                clone.querySelectorAll(".clause-link").forEach((c) => c.remove());
+                return (clone.innerText || clone.textContent || "").replaceAll("¶", "").trim();
+              }).filter(Boolean).join("\\n\\n");
             }
           }
           if (!excerpt) {
-            excerpt = (doc.body.innerText || "").replaceAll("¶", "").slice(0, 420);
+            excerpt = (doc.body.innerText || doc.body.textContent || "").replaceAll("¶", "").slice(0, 420);
           }
-          showPreview(rect, \`<div class="preview-popover-title">\${escapeHtml(title)}</div><div class="preview-popover-body">\${escapeHtml(excerpt.slice(0, 500))}</div>\`);
+          showPreview(rect, \`<div class="preview-popover-title">\${esc(title)}</div><div class="preview-popover-body">\${esc(excerpt.slice(0, 600))}</div>\`);
         } catch {
-          showPreview(rect, "<div>Preview unavailable</div>");
+          if (activeLink === link) showPreview(rect, "<div>Preview unavailable</div>");
         }
       });
-      link.addEventListener("mouseleave", hidePreview);
+      link.addEventListener("mouseleave", () => {
+        if (activeLink === link) activeLink = null;
+        scheduleHide();
+      });
     });
 
     const editor = document.getElementById("message-editor"); const previewPane = document.getElementById("message-preview");
@@ -864,19 +911,21 @@ async function verifyProposals(args) {
   if (code !== 0) process.exit(code);
 }
 
-const [command, ...args] = process.argv.slice(2);
-switch (command) {
-  case "init": ensureWorkspace().close(); break;
-  case "new": newProposal(args); break;
-  case "submit": submitProposal(args); break;
-  case "revision": revisionProposal(args); break;
-  case "review": reviewProposal(args); break;
-  case "message": appendMessage(...args); break;
-  case "messages": showMessages(args); break;
-  case "implemented": setImplemented(args); break;
-  case "status": status(args); break;
-  case "verify":
-  case "lint": await verifyProposals(args); break;
-  case "serve": await serve(args); break;
-  default: usage();
+if (import.meta.main) {
+  const [command, ...args] = process.argv.slice(2);
+  switch (command) {
+    case "init": ensureWorkspace().close(); break;
+    case "new": newProposal(args); break;
+    case "submit": submitProposal(args); break;
+    case "revision": revisionProposal(args); break;
+    case "review": reviewProposal(args); break;
+    case "message": appendMessage(...args); break;
+    case "messages": showMessages(args); break;
+    case "implemented": setImplemented(args); break;
+    case "status": status(args); break;
+    case "verify":
+    case "lint": await verifyProposals(args); break;
+    case "serve": await serve(args); break;
+    default: usage();
+  }
 }
