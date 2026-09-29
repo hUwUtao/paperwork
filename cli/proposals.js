@@ -78,6 +78,8 @@ function usage() {
   proposals review --human TAG STATE COMMENT
   proposals review --human TAG STATE COMMENT --revision NNN
   proposals message TAG ACTOR ACTION MESSAGE
+  proposals messages TAG
+  proposals implemented TAG [true|false]
   proposals status [TAG]
   proposals serve [PORT]`);
   process.exit(2);
@@ -135,6 +137,7 @@ function dirFor(tag) { ensureSafeTag(tag); return join(ROOT, tag); }
 function proposalPath(tag) { return join(dirFor(tag), "PROPOSAL.md"); }
 function messagesPath(tag) { return join(dirFor(tag), "MESSAGES.md"); }
 function statePath(tag) { return join(dirFor(tag), "state"); }
+function implementedPath(tag) { return join(dirFor(tag), "implemented"); }
 function revisionsDir(tag) { return join(dirFor(tag), "revisions"); }
 function revisionPath(tag, revision) { return join(revisionsDir(tag), `${String(revision).padStart(3, "0")}.md`); }
 function revisionStatePath(tag, revision) { return join(revisionsDir(tag), `${String(revision).padStart(3, "0")}.state`); }
@@ -158,7 +161,11 @@ function pendingSubmission(markdown) {
 function proposalRecord(tag, db = ensureWorkspace()) {
   const row = db.query("SELECT * FROM proposals WHERE tag = $tag").get({ $tag: tag });
   if (!row) die(`unknown proposal: ${tag}`);
-  return { ...row, markdown: readFileSync(proposalPath(tag), "utf8"), messages: readFileSync(messagesPath(tag), "utf8"), state: readFileSync(statePath(tag), "utf8").trim() };
+  return { ...row, markdown: readFileSync(proposalPath(tag), "utf8"), messages: readFileSync(messagesPath(tag), "utf8"), state: readFileSync(statePath(tag), "utf8").trim(), implemented: implementationState(tag) };
+}
+
+function implementationState(tag) {
+  return existsSync(implementedPath(tag)) && readFileSync(implementedPath(tag), "utf8").trim() === "true";
 }
 
 function syncSearchIndex(db) {
@@ -201,6 +208,7 @@ submitted_at: ${submittedAt}
 prerequisites: []
 dependents: []
 parallel_group: ""
+implementation_tags: []
 ---
 
 # ${title}
@@ -226,6 +234,7 @@ parallel_group: ""
 ## Risks, alternatives, and open decisions
 `);
   writeFileSync(statePath(tag), "pending\n");
+  writeFileSync(implementedPath(tag), "false\n");
   writeFileSync(messagesPath(tag), "# Messages\n\n");
   insertProposal(db, tag, title, component, submittedAt);
   syncSearchIndex(db);
@@ -246,6 +255,7 @@ function submitProposal([tag, source]) {
   mkdirSync(dir);
   writeFileSync(proposalPath(tag), pendingSubmission(markdown));
   writeFileSync(statePath(tag), "pending\n");
+  writeFileSync(implementedPath(tag), "false\n");
   writeFileSync(messagesPath(tag), "# Messages\n\n");
   insertProposal(db, tag, fields.title ?? tag, fields.component ?? tag, submittedAt);
   syncSearchIndex(db);
@@ -289,6 +299,23 @@ function appendMessage(tag, actor, action, message) {
   syncSearchIndex(ensureWorkspace());
 }
 
+function showMessages([tag]) {
+  if (!tag) usage();
+  ensureSafeTag(tag);
+  if (!existsSync(messagesPath(tag))) die(`unknown proposal: ${tag}`);
+  process.stdout.write(readFileSync(messagesPath(tag), "utf8"));
+}
+
+function setImplemented(args) {
+  const [tag, value = "true"] = args;
+  if (!tag || args.length > 2) usage();
+  ensureSafeTag(tag);
+  if (!existsSync(proposalPath(tag))) die(`unknown proposal: ${tag}`);
+  if (!(value === "true" || value === "false")) die("implemented value must be true or false");
+  writeFileSync(implementedPath(tag), `${value}\n`);
+  console.log(`${tag}: implemented=${value}`);
+}
+
 function reviewProposal(args) {
   if (args[0] !== "--human" || args.length < 4) die("review requires --human TAG STATE COMMENT [--revision NNN]");
   const [, tag, state, comment, ...options] = args;
@@ -319,7 +346,7 @@ function reviewProposal(args) {
 function status([tag]) {
   const db = ensureWorkspace();
   const rows = tag ? [proposalRecord(tag, db)] : db.query("SELECT * FROM proposals ORDER BY submitted_at").all().map((row) => proposalRecord(row.tag, db));
-  console.table(rows.map((row) => ({ tag: row.tag, state: row.state, title: row.title, last_review_at: row.last_review_at })));
+  console.table(rows.map((row) => ({ tag: row.tag, state: row.state, implemented: row.implemented, implementation_tags: listValue(frontMatter(row.markdown).implementation_tags).join(", "), title: row.title, last_review_at: row.last_review_at })));
 }
 
 function proposalSnapshot(db) {
@@ -327,6 +354,7 @@ function proposalSnapshot(db) {
     ...row,
     proposal_mtime: statSync(proposalPath(row.tag)).mtimeMs,
     messages_mtime: statSync(messagesPath(row.tag)).mtimeMs,
+    implemented_mtime: existsSync(implementedPath(row.tag)) ? statSync(implementedPath(row.tag)).mtimeMs : 0,
     state_file: readFileSync(statePath(row.tag), "utf8").trim(),
   })));
 }
@@ -340,7 +368,7 @@ function escapeHtml(value) {
 }
 
 function metadataTable(row) {
-  const metadata = { ...frontMatter(row.markdown), state: row.state, last_review_at: row.last_review_at || "" };
+  const metadata = { ...frontMatter(row.markdown), state: row.state, implemented: row.implemented, last_review_at: row.last_review_at || "" };
   const rows = Object.entries(metadata).map(([key, value]) => `<tr><th scope="row"><code>${escapeHtml(key)}</code></th><td>${escapeHtml(String(value))}</td></tr>`).join("");
   return `<table class="metadata"><thead><tr><th>frontmatter</th><th>value</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
@@ -413,11 +441,12 @@ function gitSourceView(url) {
 }
 
 const COMMENT_CSS = `.message-actions{position:relative;justify-content:flex-end}.toolbar-more,.review-menu-wrap{position:relative;display:inline-block}.toolbar-more summary{cursor:pointer;display:inline-block;border:1px solid #8c959f;border-radius:5px;padding:.55rem .8rem;font-size:.8rem;list-style:none}.toolbar-more summary::-webkit-details-marker{display:none}.floating-menu{position:absolute;z-index:4;min-width:14rem;padding:.35rem;background:#fff;border:1px solid #8c959f;border-radius:6px;box-shadow:0 8px 24px #24292f26}.floating-menu button{display:block;width:100%;margin:0;border:0;text-align:left}.more-menu{top:calc(100% + .4rem);left:0}.review-menu{right:0;bottom:calc(100% + .4rem)}.form-message{margin:.5rem 0;color:#cf222e;font-size:.9rem}button:focus-visible,summary:focus-visible{outline:2px solid #0969da;outline-offset:2px}@media(max-width:800px){.floating-menu{max-width:calc(100vw - 1.5rem);min-width:0}}`;
+const PROPOSAL_UI_CSS = `.metadata,.discovery{border:1px solid #8c959f;border-collapse:collapse}.metadata th,.metadata td,.discovery th,.discovery td{border:1px solid #d0d7de}.metadata thead th,.discovery thead th{background:#f6f8fa;border-bottom:2px solid #8c959f}.discovery tbody.state-group>tr:first-child th{border-top:2px solid #8c959f}.markdown-body :not(pre)>code{background:#f1f3f5;padding:.1rem .25rem;border-radius:3px}.markdown-body pre code{display:block;background:transparent!important;padding:0;border-radius:0}.markdown-body pre.shiki,.sourceview pre.shiki{background:#fff!important;border:1px solid #d0d7de;padding:1rem;overflow:auto}.markdown-body pre.shiki code,.sourceview pre.shiki code{background:transparent!important}.markdown-body pre.shiki code span,.sourceview pre.shiki code span{background:transparent!important}`;
 
 function page(title, body) {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)} · Proposals</title><style>
   :root{font:16px/1.55 ui-sans-serif,system-ui,sans-serif;color:#24292f;background:#f6f8fa}body{max-width:1220px;margin:0 auto;padding:2.5rem 1.25rem}a{color:#0969da}main{border-top:3px solid #24292f;padding-top:1.5rem}.grid{display:grid;grid-template-columns:minmax(0,2.2fr) minmax(18rem,1fr);gap:3rem}.meta{font-size:.9rem;border-left:1px solid #d0d7de;padding-left:1.5rem}.metadata,.discovery{border-collapse:collapse;width:100%;font-size:.82rem}.metadata th,.metadata td,.discovery th,.discovery td{border-bottom:1px solid #d8dee4;padding:.45rem;text-align:left;vertical-align:top}.metadata th{white-space:nowrap}.discovery{font-size:.88rem}.discovery tbody.state-group>tr:first-child th{padding-top:1.3rem;text-transform:capitalize}.query{display:flex;gap:.5rem;margin:1rem 0}.query input,.query select{border:1px solid #8c959f;border-radius:5px;padding:.55rem}.status{font-weight:700}.pending{color:#9a6700}.approved{color:#1a7f37}.rejected,.rejected-with-comment,.rejected-complex-or-misformatted{color:#cf222e}textarea{width:100%;min-height:7rem;box-sizing:border-box}button{padding:.55rem .8rem;margin:.25rem;border:1px solid #8c959f;border-radius:5px;background:#fff;cursor:pointer}button:hover{background:#f3f4f6}form{margin-top:1.5rem}.thread{max-width:78ch;margin-top:3rem;border-top:2px solid #24292f;padding-top:1rem}.message{border-top:1px solid #d8dee4;padding:.75rem 0}.messagebox{border:1px solid #8c959f;background:#fff;padding:.75rem}.toolbar,.message-actions{display:flex;gap:.25rem;align-items:center;flex-wrap:wrap}.toolbar button{font-size:.8rem}.toolbar-more{display:inline-block}.toolbar-more summary{cursor:pointer;display:inline-block;border:1px solid #8c959f;border-radius:5px;padding:.55rem .8rem;font-size:.8rem;list-style:none}.toolbar-more summary::-webkit-details-marker{display:none}.toolbar-more[open]{background:#f3f4f6}.toolbar-more button{display:inline-block}.markdown-body{max-width:78ch;font-family:ui-serif,Georgia,serif;font-size:1.04rem}.markdown-body h1,.markdown-body h2,.markdown-body h3{font-family:ui-sans-serif,system-ui,sans-serif;line-height:1.2}.markdown-body img{max-width:100%}.markdown-body pre{overflow:auto;background:#f6f8fa;padding:1rem;border:1px solid #d8dee4}.markdown-body code{font-family:ui-monospace,SFMono-Regular,monospace;background:#f1f3f5;padding:.1rem .25rem;border-radius:3px}.diff{white-space:pre-wrap;font:0.8rem/1.5 ui-monospace,SFMono-Regular,monospace;background:#f6f8fa;border:1px solid #d8dee4;padding:1rem;overflow:auto}.sourceview{font:0.84rem/1.55 ui-monospace,SFMono-Regular,monospace;counter-reset:line}.sourceview .line{display:block}.sourceview .line::before{content:counter(line);counter-increment:line;display:inline-block;width:3.5em;margin-right:1em;color:#8c959f;text-align:right;user-select:none}.preview-popover{position:fixed;z-index:5;max-width:22rem;padding:.8rem;background:#fff;border:1px solid #8c959f;box-shadow:0 8px 24px #24292f26;font-size:.85rem}.revision-added{color:#1a7f37}.revision-removed{color:#cf222e}@media(max-width:800px){body{padding:1.25rem}.grid{grid-template-columns:1fr}.meta{border-left:0;border-top:1px solid #d0d7de;padding:1.25rem 0}.discovery{display:block;overflow-x:auto}}
-  ${KATEX_CSS}${COMMENT_CSS}</style></head><body>${body}<script>
+  ${KATEX_CSS}${COMMENT_CSS}${PROPOSAL_UI_CSS}</style></head><body>${body}<script>
   (() => { const source = new EventSource("/events"); source.addEventListener("proposal-updated", () => setTimeout(() => location.reload(), 150));
     const blocks = [...document.querySelectorAll("pre code.language-mermaid")];
     if (blocks.length) import("https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs").then(({default: mermaid}) => { blocks.forEach((block) => { const diagram = document.createElement("div"); diagram.className = "mermaid"; diagram.textContent = block.textContent; block.closest("pre").replaceWith(diagram); }); mermaid.initialize({startOnLoad:false,securityLevel:"strict"}); return mermaid.run(); }).catch(() => {});
@@ -464,7 +493,7 @@ function viewerIndex(db, url) {
   const effectiveState = (row) => row.latest?.state ?? row.state;
   rows.sort((a, b) => (urgency.get(effectiveState(a)) ?? 9) - (urgency.get(effectiveState(b)) ?? 9) || (b.latest?.submitted_at ?? b.submitted_at).localeCompare(a.latest?.submitted_at ?? a.submitted_at));
   const groups = [...new Set(rows.map(effectiveState))].sort((a, b) => (urgency.get(a) ?? 9) - (urgency.get(b) ?? 9));
-  const groupHtml = groups.map((state) => `<tbody class="state-group"><tr><th colspan="6"><span class="status ${state}">${escapeHtml(state)}</span> <small>${rows.filter((row) => effectiveState(row) === state).length}</small></th></tr>${rows.filter((row) => effectiveState(row) === state).map((row) => { const revision = row.latest; return `<tr><td><a class="paper-link" data-preview="/proposal/${encodeURIComponent(row.tag)}" href="/proposal/${encodeURIComponent(row.tag)}"><strong>${escapeHtml(row.title)}</strong></a><br><code>${escapeHtml(row.tag)}</code>${revision ? `<br><a href="/proposal/${encodeURIComponent(row.tag)}/revision/${encodeURIComponent(revision.revision)}">r${escapeHtml(revision.revision)} · ${escapeHtml(revision.state)}</a>` : ""}</td><td>${escapeHtml(row.component)}</td><td>${relationLinks(readFileSync(proposalPath(row.tag), "utf8"), "prerequisites")}</td><td>${relationLinks(readFileSync(proposalPath(row.tag), "utf8"), "dependents")}</td><td>${escapeHtml(revision?.last_review_at || revision?.submitted_at || row.last_review_at || row.submitted_at)}</td><td><a href="/source/${encodeURIComponent(row.tag)}">source</a></td></tr>`; }).join("")}</tbody>`).join("");
+  const groupHtml = groups.map((state) => `<tbody class="state-group"><tr><th colspan="6"><span class="status ${state}">${escapeHtml(state)}</span> <small>${rows.filter((row) => effectiveState(row) === state).length}</small></th></tr>${rows.filter((row) => effectiveState(row) === state).map((row) => { const revision = row.latest; const tags = listValue(frontMatter(readFileSync(proposalPath(row.tag), "utf8")).implementation_tags); return `<tr><td><a class="paper-link" data-preview="/proposal/${encodeURIComponent(row.tag)}" href="/proposal/${encodeURIComponent(row.tag)}"><strong>${escapeHtml(row.title)}</strong></a><br><code>${escapeHtml(row.tag)}</code>${revision ? `<br><a href="/proposal/${encodeURIComponent(row.tag)}/revision/${encodeURIComponent(revision.revision)}">r${escapeHtml(revision.revision)} · ${escapeHtml(revision.state)}</a>` : ""}</td><td>${escapeHtml(row.component)}${tags.length ? `<br><small>implementation: ${escapeHtml(tags.join(", "))}</small>` : ""}<br><small>implemented: ${row.implemented ? "yes" : "no"}</small></td><td>${relationLinks(readFileSync(proposalPath(row.tag), "utf8"), "prerequisites")}</td><td>${relationLinks(readFileSync(proposalPath(row.tag), "utf8"), "dependents")}</td><td>${escapeHtml(revision?.last_review_at || revision?.submitted_at || row.last_review_at || row.submitted_at)}</td><td><a href="/source/${encodeURIComponent(row.tag)}">source</a></td></tr>`; }).join("")}</tbody>`).join("");
   const states = ["", ...STATES.filter((state) => state !== "pending")];
   return page("Proposal index", `<nav><a href="/">All proposals</a></nav><main><header><h1>Proposal index</h1><form class="query" method="get"><input name="q" value="${escapeHtml(query)}" placeholder="Search proposals" aria-label="Search proposals"><select name="state"><option value="">All states</option>${states.slice(1).map((state) => `<option ${requestedState === state ? "selected" : ""}>${escapeHtml(state)}</option>`).join("")}</select><button type="submit">Filter</button></form></header><table class="discovery"><thead><tr><th>Title</th><th>Component</th><th>Parents</th><th>Children</th><th>Reviewed / submitted</th><th>Source</th></tr></thead>${groupHtml || "<tbody><tr><td colspan=6>No matching proposals.</td></tr></tbody>"}</table></main>`);
 }
@@ -593,6 +622,8 @@ switch (command) {
   case "revision": revisionProposal(args); break;
   case "review": reviewProposal(args); break;
   case "message": appendMessage(...args); break;
+  case "messages": showMessages(args); break;
+  case "implemented": setImplemented(args); break;
   case "status": status(args); break;
   case "serve": await serve(args); break;
   default: usage();

@@ -58,6 +58,8 @@ Create one proposal per design component:
 proposals new <tag> "<title>" "<component>"
 proposals submit <tag> <path/to/PROPOSAL.md>
 proposals status
+proposals messages <tag>
+proposals implemented <tag> [true|false]
 ```
 
 Revisions are separate immutable records:
@@ -67,7 +69,16 @@ proposals revision <tag> <path/to/revised-proposal.md>
 proposals serve
 ```
 
-Human review is recorded with an explanatory comment. The viewer supports Markdown, syntax highlighting, Mermaid, LaTeX, revision diffs, full text search, source links, proposal relationships, and discussion threads.
+Human review is recorded with an explanatory comment. Use `proposals messages <tag>` to inspect the full discussion before revising or implementing a plan. The viewer supports Markdown, syntax highlighting, Mermaid, LaTeX, revision diffs, full text search, source links, proposal relationships, and discussion threads.
+
+Use the proposal front matter field `implementation_tags: []` for lightweight labels that group future implementation work. These labels are descriptive metadata only, not workflow state or a kanban board.
+
+Mark implementation progress separately from review state:
+
+```sh
+proposals implemented <tag>       # defaults to true
+proposals implemented <tag> false
+```
 
 ## Current shape
 
