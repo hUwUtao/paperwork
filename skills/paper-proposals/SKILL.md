@@ -32,13 +32,17 @@ Include sections for problem and scope, context and evidence, proposed design, i
 
 ## Submit and track review
 
-From the repository root, use the CLI:
+After installing the `paper-proposals` package in the target repository, use the CLI from that repository:
 
 ```sh
-./proposals new <tag> <title> <component>
-./proposals submit <tag> <path/to/PROPOSAL.md>
-./proposals status
+paper-proposals init
+paper-proposals new <tag> <title> <component>
+paper-proposals submit <tag> <path/to/PROPOSAL.md>
+paper-proposals status
+paper-proposals serve
 ```
+
+The workspace defaults to `.agents/paperwork/proposals` under the current repository. `PAPER_PROPOSALS_ROOT` overrides that location. In this source checkout, `./proposals` is an equivalent local wrapper.
 
 Submission commands set the stored proposal or revision state to `pending` automatically; the input paper does not need to predeclare a review state.
 

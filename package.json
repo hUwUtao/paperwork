@@ -1,7 +1,30 @@
 {
-  "name": "paper-proposals-toolchain",
-  "private": true,
+  "name": "paper-proposals",
+  "version": "0.1.0",
+  "description": "RFC proposal workflow with human review and an SSR viewer",
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/hUwUtao/paperwork.git"
+  },
+  "keywords": [
+    "rfc",
+    "proposals",
+    "design-review",
+    "bun"
+  ],
+  "bin": {
+    "paper-proposals": "cli/paper-proposals.js"
+  },
+  "files": [
+    "cli",
+    "skills",
+    "proposals",
+    "README.md"
+  ],
   "type": "module",
+  "engines": {
+    "bun": ">=1.2.0"
+  },
   "scripts": {
     "paper": "bun cli/paper-proposals.js",
     "viewer": "bun cli/paper-proposals.js serve",

@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-skill_script="$PWD/cli/paper-proposals.js"
-[[ -f "$skill_script" ]] || { printf 'error: run this command from the paperwork repository root\n' >&2; exit 1; }
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+skill_script="$script_dir/cli/paper-proposals.js"
+[[ -f "$skill_script" ]] || { printf 'error: paper-proposals CLI is missing\n' >&2; exit 1; }
 
 command=${1:-serve}
 case "$command" in

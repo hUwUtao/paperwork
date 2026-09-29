@@ -3,6 +3,7 @@ import { Database } from "bun:sqlite";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync, statSync, readdirSync } from "node:fs";
 import { join, resolve, extname } from "node:path";
 import { spawnSync } from "node:child_process";
+import { createRequire } from "node:module";
 import { marked } from "marked";
 import katex from "katex";
 import { diffLines } from "diff";
@@ -11,7 +12,8 @@ import { createHighlighter } from "shiki";
 const ROOT = resolve(process.env.PAPER_PROPOSALS_ROOT ?? ".agents/paperwork/proposals");
 const DB_PATH = join(ROOT, "tracker.db");
 const STATES = ["pending", "approved", "rejected", "rejected-with-comment", "rejected-complex-or-misformatted"];
-const KATEX_CSS = readFileSync(join(import.meta.dir, "../node_modules/katex/dist/katex.min.css"), "utf8");
+const require = createRequire(import.meta.url);
+const KATEX_CSS = readFileSync(require.resolve("katex/dist/katex.min.css"), "utf8");
 const highlighter = await createHighlighter({
   themes: ["github-light"],
   langs: ["javascript", "typescript", "json", "bash", "shellscript", "rust", "python", "markdown", "yaml", "toml", "sql", "html", "css", "diff", "text"],

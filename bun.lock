@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "paper-proposals-toolchain",
+      "name": "paper-proposals",
       "dependencies": {
         "diff": "^9.0.0",
         "katex": "^0.18.9",
