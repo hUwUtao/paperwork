@@ -28,6 +28,8 @@
   "scripts": {
     "paper": "bun cli/proposals.js",
     "viewer": "bun cli/proposals.js serve",
+    "verify": "bun cli/proposals.js verify",
+    "lint": "bun cli/verify.js",
     "test": "bun test"
   },
   "dependencies": {

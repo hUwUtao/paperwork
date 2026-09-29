@@ -53,12 +53,15 @@ After installing the `proposals` package in the target repository, use the CLI f
 ```sh
 proposals init
 proposals new <tag> <title> <component>
+proposals verify <path/to/PROPOSAL.md>
 proposals submit <tag> <path/to/PROPOSAL.md>
 proposals status
 proposals messages <tag>
 proposals implemented <tag> [true|false]
 proposals serve
 ```
+
+Run `proposals verify <path/to/PROPOSAL.md>` before submission to ensure referenced assets and source code files exist.
 
 The workspace defaults to `.agents/paperwork/proposals` under the current repository. `PAPER_PROPOSALS_ROOT` overrides that location. In this source checkout, `./proposals` is an equivalent local wrapper.
 

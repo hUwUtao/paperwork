@@ -56,6 +56,7 @@ Create one proposal per design component:
 
 ```sh
 proposals new <tag> "<title>" "<component>"
+proposals verify <path/to/PROPOSAL.md>
 proposals submit <tag> <path/to/PROPOSAL.md>
 proposals status
 proposals messages <tag>
@@ -65,9 +66,12 @@ proposals implemented <tag> [true|false]
 Revisions are separate immutable records:
 
 ```sh
+proposals verify <path/to/revised-proposal.md>
 proposals revision <tag> <path/to/revised-proposal.md>
 proposals serve
 ```
+
+Use `proposals verify [TAG | PATH]` (or `proposals lint`) to verify that all referenced assets and source code files exist before submission.
 
 Human review is recorded with an explanatory comment. Use `proposals messages <tag>` to inspect the full discussion before revising or implementing a plan. The viewer supports Markdown, syntax highlighting, Mermaid, LaTeX, revision diffs, full text search, source links, proposal relationships, and discussion threads.
 

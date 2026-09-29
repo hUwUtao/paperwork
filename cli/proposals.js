@@ -8,6 +8,7 @@ import { marked } from "marked";
 import katex from "katex";
 import { diffLines } from "diff";
 import { createHighlighter } from "shiki";
+import { parseCodeReference, SOURCE_EXTENSIONS, DEFAULT_SOURCE_ALIASES, isExternalUrl } from "./verify.js";
 
 const ROOT = resolve(process.env.PAPER_PROPOSALS_ROOT ?? ".agents/paperwork/proposals");
 const DB_PATH = join(ROOT, "tracker.db");
@@ -28,10 +29,36 @@ marked.use({
       try { return highlighter.codeToHtml(text, { lang: highlighter.getLoadedLanguages().includes(language) ? language : "text", theme: "github-light" }); } catch { return `<pre><code>${escapeHtml(text)}</code></pre>`; }
     },
     codespan({ text }) {
-      if (/^(?:[\w.-]+\/)*[\w.-]+\.(?:c|cc|cpp|css|go|h|html|java|js|json|jsx|md|py|rs|sh|sql|toml|ts|tsx|yml|yaml)$/.test(text)) {
-        return `<a class="file-ref" href="/source?file=${encodeURIComponent(text)}" title="Open ${escapeHtml(text)} in source view"><code>${escapeHtml(text)}</code></a>`;
+      const parsed = parseCodeReference(text);
+      const ext = parsed?.filePath?.split(".")?.pop()?.toLowerCase();
+      if (parsed && ext && SOURCE_EXTENSIONS.has(ext)) {
+        const linesParam = parsed.startLine ? `&lines=${parsed.startLine}${parsed.endLine && parsed.endLine !== parsed.startLine ? `-${parsed.endLine}` : ""}` : "";
+        const refParam = parsed.commit ? `&ref=${encodeURIComponent(parsed.commit)}` : "";
+        const hashPart = parsed.startLine ? `#L${parsed.startLine}${parsed.endLine && parsed.endLine !== parsed.startLine ? `-${parsed.endLine}` : ""}` : "";
+        return `<a class="file-ref" data-preview-code="${escapeHtml(text)}" href="/source?file=${encodeURIComponent(parsed.filePath)}${linesParam}${refParam}${hashPart}" title="Open ${escapeHtml(text)} in source view"><code>${escapeHtml(text)}</code></a>`;
       }
       return `<code>${escapeHtml(text)}</code>`;
+    },
+    link({ href, title, text }) {
+      const titleAttr = title ? ` title="${escapeHtml(title)}"` : "";
+      if (href.startsWith("#")) {
+        return `<a class="internal-link" data-preview-anchor="${escapeHtml(href)}" href="${escapeHtml(href)}"${titleAttr}>${text}</a>`;
+      }
+      const parsed = parseCodeReference(href);
+      const ext = parsed?.filePath?.split(".")?.pop()?.toLowerCase();
+      if (parsed && ext && SOURCE_EXTENSIONS.has(ext)) {
+        const linesParam = parsed.startLine ? `&lines=${parsed.startLine}${parsed.endLine && parsed.endLine !== parsed.startLine ? `-${parsed.endLine}` : ""}` : "";
+        const refParam = parsed.commit ? `&ref=${encodeURIComponent(parsed.commit)}` : "";
+        const hashPart = parsed.startLine ? `#L${parsed.startLine}${parsed.endLine && parsed.endLine !== parsed.startLine ? `-${parsed.endLine}` : ""}` : "";
+        return `<a class="file-ref" data-preview-code="${escapeHtml(href)}" href="/source?file=${encodeURIComponent(parsed.filePath)}${linesParam}${refParam}${hashPart}"${titleAttr}>${text}</a>`;
+      }
+      const cleanHref = href.split(/[?#]/)[0];
+      if (/^(?:\/proposal\/[A-Za-z0-9._-]+|[A-Za-z0-9._-]+$)/.test(cleanHref) && !cleanHref.includes(".") && !isExternalUrl(href)) {
+        const tag = cleanHref.replace(/^\/proposal\//, "");
+        const hash = href.includes("#") ? href.slice(href.indexOf("#")) : "";
+        return `<a class="paper-link" data-preview="/proposal/${encodeURIComponent(tag)}${hash}" href="/proposal/${encodeURIComponent(tag)}${hash}"${titleAttr}>${text}</a>`;
+      }
+      return `<a href="${escapeHtml(href)}"${titleAttr}>${text}</a>`;
     },
     heading({ tokens, depth }) {
       const text = this.parser.parseInline(tokens);
@@ -81,6 +108,8 @@ function usage() {
   proposals messages TAG
   proposals implemented TAG [true|false]
   proposals status [TAG]
+  proposals verify [TAG | PATH]
+  proposals lint [TAG | PATH]
   proposals serve [PORT]`);
   process.exit(2);
 }
@@ -133,6 +162,12 @@ function normalizeSupersededRevisions(db) {
 }
 
 function now() { return new Date().toISOString(); }
+function readText(path, fallback = "") {
+  try { return readFileSync(path, "utf8"); } catch { return fallback; }
+}
+function fileMtime(path) {
+  try { return statSync(path).mtimeMs; } catch { return 0; }
+}
 function dirFor(tag) { ensureSafeTag(tag); return join(ROOT, tag); }
 function proposalPath(tag) { return join(dirFor(tag), "PROPOSAL.md"); }
 function messagesPath(tag) { return join(dirFor(tag), "MESSAGES.md"); }
@@ -160,12 +195,12 @@ function pendingSubmission(markdown) {
 
 function proposalRecord(tag, db = ensureWorkspace()) {
   const row = db.query("SELECT * FROM proposals WHERE tag = $tag").get({ $tag: tag });
-  if (!row) die(`unknown proposal: ${tag}`);
-  return { ...row, markdown: readFileSync(proposalPath(tag), "utf8"), messages: readFileSync(messagesPath(tag), "utf8"), state: readFileSync(statePath(tag), "utf8").trim(), implemented: implementationState(tag) };
+  if (!row) throw new Error(`unknown proposal: ${tag}`);
+  return { ...row, markdown: readText(proposalPath(tag)), messages: readText(messagesPath(tag), "# Messages\n\n"), state: readText(statePath(tag), "pending\n").trim() || "pending", implemented: implementationState(tag) };
 }
 
 function implementationState(tag) {
-  return existsSync(implementedPath(tag)) && readFileSync(implementedPath(tag), "utf8").trim() === "true";
+  return readText(implementedPath(tag)).trim() === "true";
 }
 
 function syncSearchIndex(db) {
@@ -173,9 +208,9 @@ function syncSearchIndex(db) {
     db.run("DELETE FROM proposals_fts");
     const rows = db.query("SELECT tag, title, component FROM proposals ORDER BY tag").all();
     for (const row of rows) {
-      const proposal = readFileSync(proposalPath(row.tag), "utf8");
-      const messages = readFileSync(messagesPath(row.tag), "utf8");
-      const revisions = db.query("SELECT revision FROM revisions WHERE tag = $tag ORDER BY revision").all({ $tag: row.tag }).map(({ revision }) => readFileSync(revisionPath(row.tag, revision), "utf8")).join("\n");
+      const proposal = readText(proposalPath(row.tag));
+      const messages = readText(messagesPath(row.tag), "# Messages\n\n");
+      const revisions = db.query("SELECT revision FROM revisions WHERE tag = $tag ORDER BY revision").all({ $tag: row.tag }).map(({ revision }) => readText(revisionPath(row.tag, revision))).join("\n");
       db.query("INSERT INTO proposals_fts(tag, title, component, content, messages) VALUES ($tag, $title, $component, $content, $messages)").run({ $tag: row.tag, $title: row.title, $component: row.component, $content: `${proposal}\n${revisions}`, $messages: messages });
     }
     return true;
@@ -352,10 +387,10 @@ function status([tag]) {
 function proposalSnapshot(db) {
   return JSON.stringify(db.query("SELECT tag, state, last_review_at FROM proposals ORDER BY tag").all().map((row) => ({
     ...row,
-    proposal_mtime: statSync(proposalPath(row.tag)).mtimeMs,
-    messages_mtime: statSync(messagesPath(row.tag)).mtimeMs,
-    implemented_mtime: existsSync(implementedPath(row.tag)) ? statSync(implementedPath(row.tag)).mtimeMs : 0,
-    state_file: readFileSync(statePath(row.tag), "utf8").trim(),
+    proposal_mtime: fileMtime(proposalPath(row.tag)),
+    messages_mtime: fileMtime(messagesPath(row.tag)),
+    implemented_mtime: fileMtime(implementedPath(row.tag)),
+    state_file: readText(statePath(row.tag), "pending\n").trim(),
   })));
 }
 
@@ -380,8 +415,8 @@ function markdownBody(markdown) {
 function revisionRecords(db, tag) {
   return db.query("SELECT * FROM revisions WHERE tag = $tag ORDER BY revision").all({ $tag: tag }).map((row) => ({
     ...row,
-    markdown: readFileSync(revisionPath(tag, row.revision), "utf8"),
-    state: readFileSync(revisionStatePath(tag, row.revision), "utf8").trim(),
+    markdown: readText(revisionPath(tag, row.revision)),
+    state: readText(revisionStatePath(tag, row.revision), "pending\n").trim() || "pending",
   }));
 }
 
@@ -402,10 +437,18 @@ function proposalAssetResponse(tag, encodedPath) {
   try { relativePath = decodeURIComponent(encodedPath); } catch { return new Response("Invalid asset path", { status: 400 }); }
   if (!relativePath || relativePath.split("/").includes("..") || relativePath.startsWith("/")) return new Response("Invalid asset path", { status: 400 });
   const base = resolve(dirFor(tag));
-  const assetPath = resolve(base, relativePath);
-  if (!assetPath.startsWith(`${base}/`) || !existsSync(assetPath)) return new Response("Asset not found", { status: 404 });
+  const repoRoot = process.cwd();
+  const candidates = [
+    resolve(base, relativePath),
+    resolve(base, "assets", relativePath),
+    resolve(repoRoot, relativePath),
+    resolve(repoRoot, "assets", relativePath),
+    resolve(repoRoot, "node_modules", relativePath),
+  ];
+  const assetPath = candidates.find((c) => existsSync(c) && statSync(c).isFile());
+  if (!assetPath) return new Response("Asset not found", { status: 404 });
   const mime = { ".css": "text/css", ".gif": "image/gif", ".html": "text/html; charset=utf-8", ".jpeg": "image/jpeg", ".jpg": "image/jpeg", ".js": "text/javascript", ".png": "image/png", ".svg": "image/svg+xml", ".webp": "image/webp" }[extname(assetPath).toLowerCase()] ?? "application/octet-stream";
-  return new Response(readFileSync(assetPath), { headers: { "content-type": mime, "cache-control": "no-cache" } });
+  try { return new Response(readFileSync(assetPath), { headers: { "content-type": mime, "cache-control": "no-cache" } }); } catch { return new Response("Asset not found", { status: 404 }); }
 }
 
 function languageFor(name) {
@@ -427,31 +470,227 @@ function sourceView(db, tag, selectedRevision = null) {
   return page(`${row.title} source`, `<nav><a href="/proposal/${encodeURIComponent(tag)}">← Proposal</a></nav><main><header><h1>${escapeHtml(row.title)} <small>${escapeHtml(label)}</small></h1><p><a href="/proposal/${encodeURIComponent(tag)}${revision ? `/revision/${revision.revision}` : ""}/raw">raw Markdown</a></p></header><div class="sourceview">${highlightedSource(source, "proposal.md")}</div></main>`);
 }
 
+function sourcePreviewResponse(target, url) {
+  const parsed = parseCodeReference(target);
+  if (!parsed || !parsed.filePath) {
+    return new Response(JSON.stringify({ error: "Invalid source reference" }), { status: 400, headers: { "content-type": "application/json; charset=utf-8" } });
+  }
+
+  const repoRoot = process.cwd();
+  const aliased = DEFAULT_SOURCE_ALIASES[parsed.filePath] ?? parsed.filePath;
+  const cleanGitPath = (aliased.startsWith("/") ? aliased.slice(1) : aliased).replace(/^\.\//, "");
+  let content = null;
+
+  if (parsed.commit) {
+    const show = spawnSync("git", ["show", `${parsed.commit}:${cleanGitPath}`], { cwd: repoRoot, encoding: "utf8" });
+    if (show.status === 0) content = show.stdout;
+  } else {
+    const localPath = resolve(repoRoot, aliased);
+    if (existsSync(localPath)) {
+      try {
+        content = readFileSync(localPath, "utf8");
+      } catch {}
+    }
+    if (content === null) {
+      const show = spawnSync("git", ["show", `HEAD:${cleanGitPath}`], { cwd: repoRoot, encoding: "utf8" });
+      if (show.status === 0) content = show.stdout;
+    }
+  }
+
+  if (content === null) {
+    return new Response(JSON.stringify({ error: `Source not found: ${parsed.filePath}` }), { status: 404, headers: { "content-type": "application/json; charset=utf-8" } });
+  }
+
+  const allLines = content.split("\n");
+  const totalLines = allLines.length;
+
+  let start = parsed.startLine ? Math.max(1, Math.min(parsed.startLine, totalLines)) : 1;
+  let end = parsed.endLine ? Math.max(start, Math.min(parsed.endLine, totalLines)) : (parsed.startLine ? start : Math.min(30, totalLines));
+
+  const selectedLines = [];
+  for (let i = start; i <= end; i++) {
+    selectedLines.push({ num: i, text: allLines[i - 1] });
+  }
+
+  return new Response(JSON.stringify({
+    file: parsed.filePath,
+    range: `L${start}${end > start ? `-L${end}` : ""}`,
+    commit: parsed.commit,
+    lines: selectedLines,
+    totalLines,
+  }), { headers: { "content-type": "application/json; charset=utf-8" } });
+}
+
 function gitSourceView(url) {
   const file = url.searchParams.get("file") ?? "";
   const ref = url.searchParams.get("ref") ?? "HEAD";
+  const linesArg = url.searchParams.get("lines") ?? "";
   if (!/^[A-Za-z0-9._/-]+$/.test(file) || file.split("/").includes("..")) return new Response("Invalid source path", { status: 400 });
-  const aliases = { ".agents/skills/paper-proposals/SKILL.md": "skills/propose/SKILL.md", "skills/paper-proposals/SKILL.md": "skills/propose/SKILL.md", ".agents/skills/paper-proposals/scripts/paper-proposals.js": "cli/paper-proposals.js" };
-  const sourceFile = aliases[file] ?? file;
+  const sourceFile = DEFAULT_SOURCE_ALIASES[file] ?? file;
   const result = spawnSync("git", ["show", `${ref}:${sourceFile}`], { encoding: "utf8" });
   const source = result.status === 0 ? result.stdout : existsSync(resolve(sourceFile)) ? readFileSync(resolve(sourceFile), "utf8") : null;
   if (source === null) return new Response("Source not found", { status: 404 });
   const sourceLabel = result.status === 0 ? ref : "working tree";
-  return new Response(page(`${file} · ${sourceLabel}`, `<nav><a href="/">← Proposal index</a></nav><main><header><h1>${escapeHtml(file)}</h1><p>Git ref: <code>${escapeHtml(sourceLabel)}</code>${sourceFile !== file ? ` · resolved to <code>${escapeHtml(sourceFile)}</code>` : ""}</p></header><div class="sourceview">${highlightedSource(source, sourceFile)}</div></main>`), { headers: { "content-type": "text/html; charset=utf-8" } });
+  const linesScript = `<script>
+    (() => {
+      const targetRange = "${escapeHtml(linesArg)}" || location.hash.replace(/^#L?/, "");
+      if (!targetRange) return;
+      const [startStr, endStr] = targetRange.split(/[-–]/);
+      const start = parseInt(startStr, 10);
+      const end = endStr ? parseInt(endStr, 10) : start;
+      if (isNaN(start)) return;
+      const lineEls = document.querySelectorAll(".sourceview .line");
+      let targetEl = null;
+      lineEls.forEach((el, index) => {
+        const lineNum = index + 1;
+        if (lineNum >= start && lineNum <= end) {
+          el.classList.add("highlighted");
+          if (!targetEl) targetEl = el;
+        }
+      });
+      if (targetEl) targetEl.scrollIntoView({ block: "center" });
+    })();
+  </script>`;
+  return new Response(page(`${file} · ${sourceLabel}`, `<nav><a href="/">← Proposal index</a></nav><main><header><h1>${escapeHtml(file)}${linesArg ? ` <small>L${escapeHtml(linesArg)}</small>` : ""}</h1><p>Git ref: <code>${escapeHtml(sourceLabel)}</code>${sourceFile !== file ? ` · resolved to <code>${escapeHtml(sourceFile)}</code>` : ""}</p></header><div class="sourceview">${highlightedSource(source, sourceFile)}</div>${linesScript}</main>`), { headers: { "content-type": "text/html; charset=utf-8" } });
 }
 
 const COMMENT_CSS = `.message-actions{position:relative;justify-content:flex-end}.toolbar-more,.review-menu-wrap{position:relative;display:inline-block}.toolbar-more summary{cursor:pointer;display:inline-block;border:1px solid #8c959f;border-radius:5px;padding:.55rem .8rem;font-size:.8rem;list-style:none}.toolbar-more summary::-webkit-details-marker{display:none}.floating-menu{position:absolute;z-index:4;min-width:14rem;padding:.35rem;background:#fff;border:1px solid #8c959f;border-radius:6px;box-shadow:0 8px 24px #24292f26}.floating-menu button{display:block;width:100%;margin:0;border:0;text-align:left}.more-menu{top:calc(100% + .4rem);left:0}.review-menu{right:0;bottom:calc(100% + .4rem)}.form-message{margin:.5rem 0;color:#cf222e;font-size:.9rem}button:focus-visible,summary:focus-visible{outline:2px solid #0969da;outline-offset:2px}@media(max-width:800px){.floating-menu{max-width:calc(100vw - 1.5rem);min-width:0}}`;
-const PROPOSAL_UI_CSS = `.metadata,.discovery{border:1px solid #8c959f;border-collapse:collapse}.metadata th,.metadata td,.discovery th,.discovery td{border:1px solid #d0d7de}.metadata thead th,.discovery thead th{background:#f6f8fa;border-bottom:2px solid #8c959f}.discovery tbody.state-group>tr:first-child th{border-top:2px solid #8c959f}.markdown-body :not(pre)>code{background:#f1f3f5;padding:.1rem .25rem;border-radius:3px}.markdown-body pre code{display:block;background:transparent!important;padding:0;border-radius:0}.markdown-body pre.shiki,.sourceview pre.shiki{background:#fff!important;border:1px solid #d0d7de;padding:1rem;overflow:auto}.markdown-body pre.shiki code,.sourceview pre.shiki code{background:transparent!important}.markdown-body pre.shiki code span,.sourceview pre.shiki code span{background:transparent!important}`;
+const PROPOSAL_UI_CSS = `.metadata,.discovery{border:1px solid #8c959f;border-collapse:collapse}.metadata th,.metadata td,.discovery th,.discovery td{border:1px solid #d0d7de}.metadata thead th,.discovery thead th{background:#f6f8fa;border-bottom:2px solid #8c959f}.discovery tbody.state-group>tr:first-child th{border-top:2px solid #8c959f}.markdown-body :not(pre)>code{background:#f1f3f5;padding:.1rem .25rem;border-radius:3px}.markdown-body pre code{display:block;background:transparent!important;padding:0;border-radius:0;line-height:1.6}.markdown-body pre.shiki,.sourceview pre.shiki{background:#fff!important;border:1px solid #d0d7de;padding:1rem 0;overflow:auto;line-height:1.6!important}.markdown-body pre.shiki code,.sourceview pre.shiki code{background:transparent!important;line-height:1.6!important}.markdown-body pre.shiki code span,.sourceview pre.shiki code span{background:transparent!important}`;
 
 function page(title, body) {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)} · Proposals</title><style>
-  :root{font:16px/1.55 ui-sans-serif,system-ui,sans-serif;color:#24292f;background:#f6f8fa}body{max-width:1220px;margin:0 auto;padding:2.5rem 1.25rem}a{color:#0969da}main{border-top:3px solid #24292f;padding-top:1.5rem}.grid{display:grid;grid-template-columns:minmax(0,2.2fr) minmax(18rem,1fr);gap:3rem}.meta{font-size:.9rem;border-left:1px solid #d0d7de;padding-left:1.5rem}.metadata,.discovery{border-collapse:collapse;width:100%;font-size:.82rem}.metadata th,.metadata td,.discovery th,.discovery td{border-bottom:1px solid #d8dee4;padding:.45rem;text-align:left;vertical-align:top}.metadata th{white-space:nowrap}.discovery{font-size:.88rem}.discovery tbody.state-group>tr:first-child th{padding-top:1.3rem;text-transform:capitalize}.query{display:flex;gap:.5rem;margin:1rem 0}.query input,.query select{border:1px solid #8c959f;border-radius:5px;padding:.55rem}.status{font-weight:700}.pending{color:#9a6700}.approved{color:#1a7f37}.rejected,.rejected-with-comment,.rejected-complex-or-misformatted{color:#cf222e}textarea{width:100%;min-height:7rem;box-sizing:border-box}button{padding:.55rem .8rem;margin:.25rem;border:1px solid #8c959f;border-radius:5px;background:#fff;cursor:pointer}button:hover{background:#f3f4f6}form{margin-top:1.5rem}.thread{max-width:78ch;margin-top:3rem;border-top:2px solid #24292f;padding-top:1rem}.message{border-top:1px solid #d8dee4;padding:.75rem 0}.messagebox{border:1px solid #8c959f;background:#fff;padding:.75rem}.toolbar,.message-actions{display:flex;gap:.25rem;align-items:center;flex-wrap:wrap}.toolbar button{font-size:.8rem}.toolbar-more{display:inline-block}.toolbar-more summary{cursor:pointer;display:inline-block;border:1px solid #8c959f;border-radius:5px;padding:.55rem .8rem;font-size:.8rem;list-style:none}.toolbar-more summary::-webkit-details-marker{display:none}.toolbar-more[open]{background:#f3f4f6}.toolbar-more button{display:inline-block}.markdown-body{max-width:78ch;font-family:ui-serif,Georgia,serif;font-size:1.04rem}.markdown-body h1,.markdown-body h2,.markdown-body h3{font-family:ui-sans-serif,system-ui,sans-serif;line-height:1.2}.markdown-body img{max-width:100%}.markdown-body pre{overflow:auto;background:#f6f8fa;padding:1rem;border:1px solid #d8dee4}.markdown-body code{font-family:ui-monospace,SFMono-Regular,monospace;background:#f1f3f5;padding:.1rem .25rem;border-radius:3px}.diff{white-space:pre-wrap;font:0.8rem/1.5 ui-monospace,SFMono-Regular,monospace;background:#f6f8fa;border:1px solid #d8dee4;padding:1rem;overflow:auto}.sourceview{font:0.84rem/1.55 ui-monospace,SFMono-Regular,monospace;counter-reset:line}.sourceview .line{display:block}.sourceview .line::before{content:counter(line);counter-increment:line;display:inline-block;width:3.5em;margin-right:1em;color:#8c959f;text-align:right;user-select:none}.preview-popover{position:fixed;z-index:5;max-width:22rem;padding:.8rem;background:#fff;border:1px solid #8c959f;box-shadow:0 8px 24px #24292f26;font-size:.85rem}.revision-added{color:#1a7f37}.revision-removed{color:#cf222e}@media(max-width:800px){body{padding:1.25rem}.grid{grid-template-columns:1fr}.meta{border-left:0;border-top:1px solid #d0d7de;padding:1.25rem 0}.discovery{display:block;overflow-x:auto}}
+  :root{font:16px/1.55 ui-sans-serif,system-ui,sans-serif;color:#24292f;background:#f6f8fa}body{max-width:1220px;margin:0 auto;padding:2.5rem 1.25rem}a{color:#0969da}main{border-top:3px solid #24292f;padding-top:1.5rem}.grid{display:grid;grid-template-columns:minmax(0,2.2fr) minmax(18rem,1fr);gap:3rem}.meta{font-size:.9rem;border-left:1px solid #d0d7de;padding-left:1.5rem}.metadata,.discovery{border-collapse:collapse;width:100%;font-size:.82rem}.metadata th,.metadata td,.discovery th,.discovery td{border-bottom:1px solid #d8dee4;padding:.45rem;text-align:left;vertical-align:top}.metadata th{white-space:nowrap}.discovery{font-size:.88rem}.discovery tbody.state-group>tr:first-child th{padding-top:1.3rem;text-transform:capitalize}.query{display:flex;gap:.5rem;margin:1rem 0}.query input,.query select{border:1px solid #8c959f;border-radius:5px;padding:.55rem}.status{font-weight:700}.pending{color:#9a6700}.approved{color:#1a7f37}.rejected,.rejected-with-comment,.rejected-complex-or-misformatted{color:#cf222e}textarea{width:100%;min-height:7rem;box-sizing:border-box}button{padding:.55rem .8rem;margin:.25rem;border:1px solid #8c959f;border-radius:5px;background:#fff;cursor:pointer}button:hover{background:#f3f4f6}form{margin-top:1.5rem}.thread{max-width:78ch;margin-top:3rem;border-top:2px solid #24292f;padding-top:1rem}.message{border-top:1px solid #d8dee4;padding:.75rem 0}.messagebox{border:1px solid #8c959f;background:#fff;padding:.75rem}.toolbar,.message-actions{display:flex;gap:.25rem;align-items:center;flex-wrap:wrap}.toolbar button{font-size:.8rem}.toolbar-more{display:inline-block}.toolbar-more summary{cursor:pointer;display:inline-block;border:1px solid #8c959f;border-radius:5px;padding:.55rem .8rem;font-size:.8rem;list-style:none}.toolbar-more summary::-webkit-details-marker{display:none}.toolbar-more[open]{background:#f3f4f6}.toolbar-more button{display:inline-block}.markdown-body{max-width:78ch;font-family:ui-serif,Georgia,serif;font-size:1.04rem}.markdown-body h1,.markdown-body h2,.markdown-body h3{font-family:ui-sans-serif,system-ui,sans-serif;line-height:1.2}.markdown-body img{max-width:100%}.markdown-body pre{overflow:auto;background:#f6f8fa;padding:1rem;border:1px solid #d8dee4;line-height:1.5}.markdown-body code{font-family:ui-monospace,SFMono-Regular,monospace;background:#f1f3f5;padding:.1rem .25rem;border-radius:3px}.diff{white-space:pre-wrap;font:0.8rem/1.5 ui-monospace,SFMono-Regular,monospace;background:#f6f8fa;border:1px solid #d8dee4;padding:1rem;overflow:auto}
+  .sourceview{font:0.85rem/1.6 ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace!important;counter-reset:line}
+  .sourceview pre,.sourceview code{font:inherit!important;line-height:1.6!important}
+  .sourceview pre.shiki{background:#fff!important;border:1px solid #d0d7de;padding:1rem 0;overflow:auto;line-height:1.6!important}
+  .sourceview pre.shiki code{display:block;line-height:1.6!important;background:transparent!important}
+  .sourceview .line{display:block;min-height:1.6em;line-height:1.6!important;padding:0 1.25rem}
+  .sourceview .line:hover{background:#f6f8fa}
+  .sourceview .line.highlighted{background:#fff8c5}
+  .sourceview .line::before{content:counter(line);counter-increment:line;display:inline-block;width:3.5em;margin-right:1.25em;color:#8c959f;text-align:right;user-select:none;line-height:1.6!important}
+  .preview-popover{position:fixed;z-index:50;max-width:34rem;max-height:22rem;overflow-y:auto;padding:.9rem 1.1rem;background:#fff;border:1px solid #8c959f;border-radius:6px;box-shadow:0 8px 24px rgba(36,41,47,.18);font-size:.88rem;line-height:1.55;color:#24292f}
+  .preview-popover-title{font-weight:700;font-size:.95rem;margin-bottom:.45rem;padding-bottom:.35rem;border-bottom:1px solid #d8dee4;color:#0969da}
+  .preview-popover-body{white-space:pre-wrap;word-break:break-word;line-height:1.55}
+  .preview-code-block{margin:.4rem 0 0 0;padding:.6rem;background:#f6f8fa;border:1px solid #d0d7de;border-radius:4px;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-size:.82rem;line-height:1.6;overflow-x:auto;white-space:pre}
+  .preview-code-line{display:block;min-height:1.6em;line-height:1.6}
+  .preview-line-num{display:inline-block;width:3.2em;margin-right:.8em;color:#8c959f;text-align:right;user-select:none}
+  .revision-added{color:#1a7f37}.revision-removed{color:#cf222e}@media(max-width:800px){body{padding:1.25rem}.grid{grid-template-columns:1fr}.meta{border-left:0;border-top:1px solid #d0d7de;padding:1.25rem 0}.discovery{display:block;overflow-x:auto}}
   ${KATEX_CSS}${COMMENT_CSS}${PROPOSAL_UI_CSS}</style></head><body>${body}<script>
   (() => { const source = new EventSource("/events"); source.addEventListener("proposal-updated", () => setTimeout(() => location.reload(), 150));
     const blocks = [...document.querySelectorAll("pre code.language-mermaid")];
     if (blocks.length) import("https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs").then(({default: mermaid}) => { blocks.forEach((block) => { const diagram = document.createElement("div"); diagram.className = "mermaid"; diagram.textContent = block.textContent; block.closest("pre").replaceWith(diagram); }); mermaid.initialize({startOnLoad:false,securityLevel:"strict"}); return mermaid.run(); }).catch(() => {});
+    
     let preview;
-    document.querySelectorAll("[data-preview]").forEach((link) => { link.addEventListener("mouseenter", async () => { preview?.remove(); preview = document.createElement("div"); preview.className = "preview-popover"; preview.textContent = "Loading preview…"; document.body.append(preview); const rect = link.getBoundingClientRect(); preview.style.left = Math.min(rect.left, innerWidth - 360) + "px"; preview.style.top = (rect.bottom + 8) + "px"; try { const html = await fetch(link.dataset.preview).then((response) => response.text()); const doc = new DOMParser().parseFromString(html, "text/html"); preview.innerHTML = "<strong>" + doc.title.replace(" · Proposals", "") + "</strong><br>" + (doc.querySelector(".markdown-body")?.innerText || doc.body.innerText).slice(0, 420); } catch { preview.textContent = "Preview unavailable"; } }); link.addEventListener("mouseleave", () => { setTimeout(() => preview?.remove(), 180); }); });
+    const showPreview = (rect, html) => {
+      preview?.remove();
+      preview = document.createElement("div");
+      preview.className = "preview-popover";
+      preview.innerHTML = html;
+      document.body.append(preview);
+      const popoverWidth = Math.min(innerWidth - 32, 544);
+      const left = Math.max(16, Math.min(rect.left, innerWidth - popoverWidth - 16));
+      preview.style.left = left + "px";
+      const spaceBelow = innerHeight - rect.bottom;
+      if (spaceBelow < 200 && rect.top > 220) {
+        preview.style.bottom = (innerHeight - rect.top + 8) + "px";
+      } else {
+        preview.style.top = (rect.bottom + 8) + "px";
+      }
+    };
+    const hidePreview = () => { setTimeout(() => preview?.remove(), 180); };
+
+    // 1. Code reference preview popup
+    document.querySelectorAll("[data-preview-code]").forEach((link) => {
+      link.addEventListener("mouseenter", async () => {
+        const rect = link.getBoundingClientRect();
+        showPreview(rect, "<div>Loading source preview…</div>");
+        try {
+          const codeRef = link.dataset.previewCode;
+          const res = await fetch(\`/preview/source?target=\${encodeURIComponent(codeRef)}\`).then((r) => r.json());
+          if (res.error) {
+            showPreview(rect, \`<div class="preview-popover-title">\${escapeHtml(codeRef)}</div><div>\${escapeHtml(res.error)}</div>\`);
+            return;
+          }
+          const linesHtml = res.lines.map((l) => \`<span class="preview-code-line"><span class="preview-line-num">\${l.num}</span>\${escapeHtml(l.text)}</span>\`).join("\\n");
+          const title = \`\${escapeHtml(res.file)}\${res.range ? \` · \${escapeHtml(res.range)}\` : ""}\${res.commit ? \` @ \${escapeHtml(res.commit.slice(0, 8))}\` : ""}\`;
+          showPreview(rect, \`<div class="preview-popover-title">\${title}</div><pre class="preview-code-block"><code>\${linesHtml}</code></pre>\`);
+        } catch {
+          showPreview(rect, "<div>Source preview unavailable</div>");
+        }
+      });
+      link.addEventListener("mouseleave", hidePreview);
+    });
+
+    // 2. Paper reference preview popup (within paper or outside)
+    document.querySelectorAll("[data-preview-anchor], [data-preview]").forEach((link) => {
+      link.addEventListener("mouseenter", async () => {
+        const rect = link.getBoundingClientRect();
+        const anchor = link.dataset.previewAnchor;
+        if (anchor) {
+          const targetId = anchor.replace(/^#/, "");
+          const targetEl = document.getElementById(targetId);
+          if (targetEl) {
+            const titleClone = targetEl.cloneNode(true);
+            titleClone.querySelectorAll(".clause-link").forEach((c) => c.remove());
+            const cleanTitle = (titleClone.textContent || "").replaceAll("¶", "").trim();
+            const targetDepth = parseInt(targetEl.tagName.replace(/^H/i, ""), 10) || 6;
+            let sib = targetEl.nextElementSibling;
+            const parts = [];
+            while (sib && !/^H[1-6]$/i.test(sib.tagName)) {
+              const clone = sib.cloneNode(true);
+              clone.querySelectorAll(".clause-link").forEach((c) => c.remove());
+              const text = (clone.innerText || clone.textContent || "").replaceAll("¶", "").trim();
+              if (text) parts.push(text);
+              sib = sib.nextElementSibling;
+              if (parts.length >= 4) break;
+            }
+            const excerpt = parts.join("\\n\\n").slice(0, 500);
+            showPreview(rect, \`<div class="preview-popover-title">\${escapeHtml(cleanTitle)}</div><div class="preview-popover-body">\${escapeHtml(excerpt || "Section referenced")}</div>\`);
+            return;
+          }
+        }
+
+        showPreview(rect, "<div>Loading proposal preview…</div>");
+        try {
+          const url = link.dataset.preview;
+          const html = await fetch(url).then((response) => response.text());
+          const doc = new DOMParser().parseFromString(html, "text/html");
+          doc.querySelectorAll(".clause-link").forEach((c) => c.remove());
+          const title = doc.title.replace(" · Proposals", "").replaceAll("¶", "").trim();
+          let excerpt = "";
+          const hash = url.includes("#") ? url.slice(url.indexOf("#") + 1) : "";
+          if (hash) {
+            const targetSec = doc.getElementById(hash);
+            if (targetSec) {
+              let sib = targetSec.nextElementSibling;
+              const parts = [];
+              while (sib && !/^H[1-6]$/i.test(sib.tagName)) {
+                const text = (sib.innerText || sib.textContent || "").replaceAll("¶", "").trim();
+                if (text) parts.push(text);
+                sib = sib.nextElementSibling;
+                if (parts.length >= 3) break;
+              }
+              excerpt = parts.join("\\n\\n");
+            }
+          }
+          if (!excerpt) {
+            const article = doc.querySelector(".markdown-body");
+            if (article) {
+              const pEls = [...article.querySelectorAll("p, li, blockquote")].slice(0, 4);
+              excerpt = pEls.map((p) => (p.innerText || p.textContent || "").replaceAll("¶", "").trim()).filter(Boolean).join("\\n\\n");
+            }
+          }
+          if (!excerpt) {
+            excerpt = (doc.body.innerText || "").replaceAll("¶", "").slice(0, 420);
+          }
+          showPreview(rect, \`<div class="preview-popover-title">\${escapeHtml(title)}</div><div class="preview-popover-body">\${escapeHtml(excerpt.slice(0, 500))}</div>\`);
+        } catch {
+          showPreview(rect, "<div>Preview unavailable</div>");
+        }
+      });
+      link.addEventListener("mouseleave", hidePreview);
+    });
+
     const editor = document.getElementById("message-editor"); const previewPane = document.getElementById("message-preview");
     document.querySelectorAll("[data-markdown]").forEach((button) => button.addEventListener("click", () => { const [before, after] = button.dataset.markdown.split("|"); const start = editor.selectionStart; const end = editor.selectionEnd; const selected = editor.value.slice(start, end) || "text"; editor.setRangeText(before + selected + after, start, end, "select"); editor.focus(); }));
     const form = document.getElementById("message-form"); const reviewTrigger = document.getElementById("review-trigger"); const reviewMenu = document.getElementById("review-menu"); const validation = document.getElementById("review-validation"); const reviewItems = [...(reviewMenu?.querySelectorAll('[role="menuitem"]') ?? [])];
@@ -487,13 +726,13 @@ function viewerIndex(db, url) {
   const query = url.searchParams.get("q")?.trim() ?? "";
   const requestedState = url.searchParams.get("state") ?? "";
   let rows = query ? db.query("SELECT p.* FROM proposals p JOIN proposals_fts f ON f.tag = p.tag WHERE proposals_fts MATCH $query ORDER BY p.submitted_at DESC").all({ $query: searchExpression(query) }) : db.query("SELECT * FROM proposals ORDER BY submitted_at DESC").all();
-  rows = rows.map((row) => ({ ...row, latest: latestRevision(db, row.tag) }));
+  rows = rows.map((row) => ({ ...row, implemented: implementationState(row.tag), latest: latestRevision(db, row.tag) }));
   if (requestedState) rows = rows.filter((row) => (row.latest?.state ?? row.state) === requestedState);
   const urgency = new Map([["pending", 0], ["rejected-with-comment", 1], ["rejected-complex-or-misformatted", 2], ["rejected", 3], ["approved", 4]]);
   const effectiveState = (row) => row.latest?.state ?? row.state;
   rows.sort((a, b) => (urgency.get(effectiveState(a)) ?? 9) - (urgency.get(effectiveState(b)) ?? 9) || (b.latest?.submitted_at ?? b.submitted_at).localeCompare(a.latest?.submitted_at ?? a.submitted_at));
   const groups = [...new Set(rows.map(effectiveState))].sort((a, b) => (urgency.get(a) ?? 9) - (urgency.get(b) ?? 9));
-  const groupHtml = groups.map((state) => `<tbody class="state-group"><tr><th colspan="6"><span class="status ${state}">${escapeHtml(state)}</span> <small>${rows.filter((row) => effectiveState(row) === state).length}</small></th></tr>${rows.filter((row) => effectiveState(row) === state).map((row) => { const revision = row.latest; const tags = listValue(frontMatter(readFileSync(proposalPath(row.tag), "utf8")).implementation_tags); return `<tr><td><a class="paper-link" data-preview="/proposal/${encodeURIComponent(row.tag)}" href="/proposal/${encodeURIComponent(row.tag)}"><strong>${escapeHtml(row.title)}</strong></a><br><code>${escapeHtml(row.tag)}</code>${revision ? `<br><a href="/proposal/${encodeURIComponent(row.tag)}/revision/${encodeURIComponent(revision.revision)}">r${escapeHtml(revision.revision)} · ${escapeHtml(revision.state)}</a>` : ""}</td><td>${escapeHtml(row.component)}${tags.length ? `<br><small>implementation: ${escapeHtml(tags.join(", "))}</small>` : ""}<br><small>implemented: ${row.implemented ? "yes" : "no"}</small></td><td>${relationLinks(readFileSync(proposalPath(row.tag), "utf8"), "prerequisites")}</td><td>${relationLinks(readFileSync(proposalPath(row.tag), "utf8"), "dependents")}</td><td>${escapeHtml(revision?.last_review_at || revision?.submitted_at || row.last_review_at || row.submitted_at)}</td><td><a href="/source/${encodeURIComponent(row.tag)}">source</a></td></tr>`; }).join("")}</tbody>`).join("");
+  const groupHtml = groups.map((state) => `<tbody class="state-group"><tr><th colspan="6"><span class="status ${state}">${escapeHtml(state)}</span> <small>${rows.filter((row) => effectiveState(row) === state).length}</small></th></tr>${rows.filter((row) => effectiveState(row) === state).map((row) => { const revision = row.latest; const markdown = readText(proposalPath(row.tag)); const tags = listValue(frontMatter(markdown).implementation_tags); return `<tr><td><a class="paper-link" data-preview="/proposal/${encodeURIComponent(row.tag)}" href="/proposal/${encodeURIComponent(row.tag)}"><strong>${escapeHtml(row.title)}</strong></a><br><code>${escapeHtml(row.tag)}</code>${revision ? `<br><a href="/proposal/${encodeURIComponent(row.tag)}/revision/${encodeURIComponent(revision.revision)}">r${escapeHtml(revision.revision)} · ${escapeHtml(revision.state)}</a>` : ""}</td><td>${escapeHtml(row.component)}${tags.length ? `<br><small>implementation: ${escapeHtml(tags.join(", "))}</small>` : ""}<br><small>implemented: ${row.implemented ? "yes" : "no"}</small></td><td>${relationLinks(markdown, "prerequisites")}</td><td>${relationLinks(markdown, "dependents")}</td><td>${escapeHtml(revision?.last_review_at || revision?.submitted_at || row.last_review_at || row.submitted_at)}</td><td><a href="/source/${encodeURIComponent(row.tag)}">source</a></td></tr>`; }).join("")}</tbody>`).join("");
   const states = ["", ...STATES.filter((state) => state !== "pending")];
   return page("Proposal index", `<nav><a href="/">All proposals</a></nav><main><header><h1>Proposal index</h1><form class="query" method="get"><input name="q" value="${escapeHtml(query)}" placeholder="Search proposals" aria-label="Search proposals"><select name="state"><option value="">All states</option>${states.slice(1).map((state) => `<option ${requestedState === state ? "selected" : ""}>${escapeHtml(state)}</option>`).join("")}</select><button type="submit">Filter</button></form></header><table class="discovery"><thead><tr><th>Title</th><th>Component</th><th>Parents</th><th>Children</th><th>Reviewed / submitted</th><th>Source</th></tr></thead>${groupHtml || "<tbody><tr><td colspan=6>No matching proposals.</td></tr></tbody>"}</table></main>`);
 }
@@ -574,6 +813,10 @@ async function serve([portArg]) {
       const sourceMatch = url.pathname.match(/^\/source\/([^/]+)(?:\/revision\/([^/]+))?$/);
       const actionMatch = url.pathname.match(/^\/proposal\/([^/]+)\/(review|message)$/);
       if (request.method === "GET" && url.pathname === "/events") return streamFor(request);
+      if (request.method === "GET" && url.pathname === "/preview/source") {
+        const target = url.searchParams.get("target") ?? url.searchParams.get("file") ?? "";
+        return sourcePreviewResponse(target, url);
+      }
       if (request.method === "GET" && url.pathname === "/") return new Response(viewerIndex(db, url), { headers: { "content-type": "text/html; charset=utf-8" } });
       if (request.method === "GET" && url.pathname === "/source") return gitSourceView(url);
       if (request.method === "GET" && sourceMatch) {
@@ -582,7 +825,8 @@ async function serve([portArg]) {
       if (request.method === "GET" && assetMatch) return proposalAssetResponse(decodeURIComponent(assetMatch[1]), assetMatch[2]);
       if (request.method === "GET" && rawMatch) {
         const tag = decodeURIComponent(rawMatch[1]);
-        const markdown = rawMatch[2] ? revisionRecords(db, tag).find((item) => item.revision === rawMatch[2])?.markdown : proposalRecord(tag, db).markdown;
+        let markdown;
+        try { markdown = rawMatch[2] ? revisionRecords(db, tag).find((item) => item.revision === rawMatch[2])?.markdown : proposalRecord(tag, db).markdown; } catch { return new Response("Not found", { status: 404 }); }
         if (!markdown) return new Response("Not found", { status: 404 });
         return new Response(markdown, { headers: { "content-type": "text/markdown; charset=utf-8", "content-disposition": `inline; filename="${tag}${rawMatch[2] ? `-r${rawMatch[2]}` : ""}.md"` } });
       }
@@ -614,6 +858,12 @@ async function serve([portArg]) {
   console.log(`Proposals viewer: http://${server.hostname}:${server.port}`);
 }
 
+async function verifyProposals(args) {
+  const { runCli } = await import("./verify.js");
+  const code = await runCli(args);
+  if (code !== 0) process.exit(code);
+}
+
 const [command, ...args] = process.argv.slice(2);
 switch (command) {
   case "init": ensureWorkspace().close(); break;
@@ -625,6 +875,8 @@ switch (command) {
   case "messages": showMessages(args); break;
   case "implemented": setImplemented(args); break;
   case "status": status(args); break;
+  case "verify":
+  case "lint": await verifyProposals(args); break;
   case "serve": await serve(args); break;
   default: usage();
 }
